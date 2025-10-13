@@ -1,14 +1,35 @@
-// Daftar isi /public/assets untuk picker
+// Daftar isi direktori assets untuk picker
 const fs = require('fs');
 const path = require('path');
 
-module.exports = (req, res) => {
+function resolveAssetsRoot() {
+  const candidates = [
+    path.resolve(process.cwd(), 'assets'),
+    path.resolve(process.cwd(), 'public/assets'),
+  ];
+
+  for (const dir of candidates) {
+    try {
+      const stat = fs.statSync(dir);
+      if (stat && stat.isDirectory()) {
+        return dir;
+      }
+    } catch (err) {
+      // ignore missing directories, try the next candidate
+    }
+  }
+
+  // fallback to the first candidate even if it doesn't exist yet so we
+  // preserve the original directory structure expectations
+  return candidates[0];
+}
+
+const handler = (req, res) => {
   try {
     const q = req.query || {};
     const reqPath = String(q.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 
-    const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
-    const ASSETS_DIR = path.join(PUBLIC_DIR, 'assets');
+    const ASSETS_DIR = resolveAssetsRoot();
 
     // Cegah path traversal
     const target = path.resolve(ASSETS_DIR, reqPath);
@@ -49,4 +70,10 @@ module.exports = (req, res) => {
   } catch (e) {
     res.status(500).json({ ok:false, error:'Gagal membaca direktori' });
   }
+};
+
+module.exports = handler;
+module.exports.config = {
+  runtime: 'nodejs18.x',
+  includeFiles: ['assets/**', 'public/assets/**'],
 };
