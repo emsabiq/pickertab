@@ -38,6 +38,9 @@ let state = { rev: 0, activeIndex: 0, tabs: [], updatedAt: '' };
 async function fetchManifestData() {
   const ts = Date.now();
   const sources = [`manifest.json?ts=${ts}`, `/api/manifest?ts=${ts}`];
+  let best = null;
+  let bestRev = -Infinity;
+  let bestUpdated = -Infinity;
 
   for (const url of sources) {
     try {
@@ -45,14 +48,24 @@ async function fetchManifestData() {
       if (!res.ok) continue;
       const data = await res.json();
       if (data && typeof data === 'object' && Array.isArray(data.tabs)) {
-        return data;
+        const rev = Number(data.rev) || 0;
+        const updatedAt = Date.parse(data.updatedAt || '') || 0;
+        if (
+          !best ||
+          rev > bestRev ||
+          (rev === bestRev && updatedAt > bestUpdated)
+        ) {
+          best = data;
+          bestRev = rev;
+          bestUpdated = updatedAt;
+        }
       }
     } catch (err) {
       // ignore and try the next source
     }
   }
 
-  return null;
+  return best;
 }
 
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
