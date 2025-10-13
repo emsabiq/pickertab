@@ -190,6 +190,7 @@ test('writes to default fallback path when manifest is not writable', async (t) 
   const originalAdminPin = process.env.ADMIN_PIN;
   const originalManifestPath = process.env.MANIFEST_PATH;
   const originalFallbackPath = process.env.MANIFEST_FALLBACK_PATH;
+  const originalMkdir = fs.promises.mkdir;
 
   process.env.ADMIN_PIN = 'PIN123';
   process.env.MANIFEST_PATH = manifestPath;
@@ -200,6 +201,15 @@ test('writes to default fallback path when manifest is not writable', async (t) 
 
   const originalWriteFile = fs.promises.writeFile;
   const writeTargets = [];
+
+  fs.promises.mkdir = async (targetPath, ...rest) => {
+    if (targetPath === path.dirname(manifestPath)) {
+      const err = new Error('read-only file system');
+      err.code = 'EROFS';
+      throw err;
+    }
+    return originalMkdir(targetPath, ...rest);
+  };
 
   fs.promises.writeFile = async (targetPath, ...rest) => {
     writeTargets.push(targetPath);
@@ -252,8 +262,47 @@ test('writes to default fallback path when manifest is not writable', async (t) 
 
     const manifest = JSON.parse(fs.readFileSync(defaultFallbackPath, 'utf8'));
     assert.equal(manifest.rev, 1);
+
+    const req2 = {
+      body: {
+        pin: 'PIN123',
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'Example',
+            type: 'link',
+            url: 'https://example.com',
+          },
+          {
+            id: 'tab-2',
+            title: 'Second',
+            type: 'pdf',
+            url: 'https://example.com/doc.pdf',
+          },
+        ],
+        activeIndex: 1,
+      },
+    };
+    const res2 = createMockRes();
+
+    await saveManifest(req2, res2);
+
+    assert.equal(res2.statusCode, 200);
+    assert.equal(res2.body.ok, true);
+    assert.equal(res2.body.location, defaultFallbackPath);
+    assert.equal(res2.body.manifest.rev, 2);
+    assert.equal(res2.body.manifest.activeIndex, 1);
+    assert.equal(Array.isArray(res2.body.manifest.tabs), true);
+    assert.equal(res2.body.manifest.tabs.length, 2);
+
+    const manifestAfter = JSON.parse(fs.readFileSync(defaultFallbackPath, 'utf8'));
+    assert.equal(manifestAfter.rev, 2);
+    assert.equal(manifestAfter.activeIndex, 1);
+    assert.equal(Array.isArray(manifestAfter.tabs), true);
+    assert.equal(manifestAfter.tabs.length, 2);
   } finally {
     fs.promises.writeFile = originalWriteFile;
+    fs.promises.mkdir = originalMkdir;
     if (fallbackExisted) {
       fs.writeFileSync(defaultFallbackPath, fallbackBackup);
     } else {
