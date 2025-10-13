@@ -18,8 +18,11 @@ API bekerja dengan benar:
 | `ADMIN_PIN` | PIN yang wajib dikirim operator Control saat menekan tombol **Publish**. Digunakan untuk memverifikasi permintaan pada `/api/save_manifest`. |
 | `ALLOWED_HOSTS` | Daftar host eksternal yang diizinkan untuk diproksi oleh `/api/proxy`. Gunakan format koma, mis. `example.com,files.example.com`. Subdomain otomatis diperbolehkan. |
 | `MANIFEST_PATH` | (Opsional) Lokasi berkas manifest yang akan disimpan. Default-nya `manifest.json` di root project. |
+| `MANIFEST_FALLBACK_PATH` | (Opsional) Lokasi alternatif ketika penulisan manifest utama gagal. Default-nya direktori temporary OS (mis. `/tmp/manifest.json`). |
 
 Anda dapat menyalin `.env.example` menjadi `.env` atau mengisi variabel tersebut sesuai mekanisme hosting Anda.
+
+> **Catatan:** Ketika penulisan atomik ke `MANIFEST_PATH` tidak memungkinkan (mis. filesystem read-only di lingkungan serverless), API otomatis menyimpan manifest ke jalur fallback dan menyertakan metadata lokasi pada respons.
 
 ## Endpoints Node.js
 
@@ -38,6 +41,6 @@ Anda dapat menyalin `.env.example` menjadi `.env` atau mengisi variabel tersebut
 ## Pengembangan
 
 1. Instal dependensi dan jalankan server Node.js sesuai framework pilihan Anda.
-2. Salin `.env.example` menjadi `.env`, kemudian atur `ADMIN_PIN` dan `ALLOWED_HOSTS`.
+2. Salin `.env.example` menjadi `.env`, kemudian atur `ADMIN_PIN`, `ALLOWED_HOSTS`, serta opsional `MANIFEST_PATH`/`MANIFEST_FALLBACK_PATH` sesuai kebutuhan hosting.
 3. Buka `control.html` untuk mengatur tab dan tekan **Publish** setelah memasukkan PIN.
 4. Buka `index.html` pada layar display; viewer akan memperbarui isi secara otomatis.

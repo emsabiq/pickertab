@@ -1,3 +1,4 @@
+const os = require('os');
 const path = require('path');
 
 const DEFAULT_ALLOWED_HOSTS = [
@@ -22,7 +23,7 @@ const MANIFEST_PATH = process.env.MANIFEST_PATH
   : path.resolve(process.cwd(), 'manifest.json');
 const MANIFEST_FALLBACK_PATH = process.env.MANIFEST_FALLBACK_PATH
   ? path.resolve(process.cwd(), process.env.MANIFEST_FALLBACK_PATH)
-  : null;
+  : path.join(os.tmpdir(), 'manifest.json');
 
 const envHosts = parseHosts(process.env.ALLOWED_HOSTS);
 const ALLOWED_HOSTS = envHosts.length ? envHosts : DEFAULT_ALLOWED_HOSTS;
