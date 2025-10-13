@@ -3,26 +3,17 @@ const fs = require('fs');
 const path = require('path');
 
 function resolveAssetsRoot() {
-  const baseDirs = [
-    process.cwd(),
-    __dirname,
-    path.resolve(__dirname, '..'),
-    path.resolve(__dirname, '../..'),
+  const candidates = [
+    path.resolve(process.cwd(), 'assets'),
+    path.resolve(process.cwd(), 'public', 'assets'),
+    path.resolve(__dirname, 'assets'),
+    path.resolve(__dirname, '..', 'assets'),
+    path.resolve(__dirname, '..', 'public', 'assets'),
   ];
 
-  const relPaths = ['assets', path.join('public', 'assets')];
-  const candidates = [];
+  const uniqueCandidates = candidates.filter((dir, idx) => candidates.indexOf(dir) === idx);
 
-  for (const base of baseDirs) {
-    for (const rel of relPaths) {
-      const candidate = path.resolve(base, rel);
-      if (!candidates.includes(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-
-  for (const dir of candidates) {
+  for (const dir of uniqueCandidates) {
     try {
       const stat = fs.statSync(dir);
       if (stat && stat.isDirectory()) {
@@ -35,7 +26,7 @@ function resolveAssetsRoot() {
 
   // fallback to the first candidate even if it doesn't exist yet so we
   // preserve the original directory structure expectations
-  return candidates[0];
+  return uniqueCandidates[0];
 }
 
 const handler = (req, res) => {
