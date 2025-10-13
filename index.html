@@ -65,7 +65,7 @@ function renderViewer(){
 
   if (item.type === 'image') {
     const img = document.createElement('img');
-    img.src = local ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
+    img.src = local ? item.url : ('/api/proxy?url=' + encodeURIComponent(item.url));
     img.alt = item.title;
     viewer.appendChild(img);
   } else if (item.type === 'link') {
@@ -75,7 +75,7 @@ function renderViewer(){
     viewer.appendChild(ifr);
   } else { // pdf
     const ifr = document.createElement('iframe');
-    ifr.src = local ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
+    ifr.src = local ? item.url : ('/api/proxy?url=' + encodeURIComponent(item.url));
     ifr.title = item.title;
     viewer.appendChild(ifr);
   }
