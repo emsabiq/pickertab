@@ -13,6 +13,7 @@
     { "src": "/", "dest": "/index.html" },
     { "src": "/control", "dest": "/control.html" },
     { "src": "/control.html", "dest": "/control.html" },
-    { "src": "/manifest.json", "dest": "/manifest.json" }
+    { "src": "/manifest.json", "dest": "/manifest.json" },
+    { "src": "/api/(.*)", "dest": "/api/$1.js" }
   ]
 }
