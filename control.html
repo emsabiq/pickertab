@@ -242,7 +242,7 @@ async function loadDir(){
   setCrumb();
   pickerBody.innerHTML = `<tr><td colspan=4 class="text-center text-secondary p-3"><div class="spinner-border me-2"></div>Memuat…</td></tr>`;
   try{
-const ENDPOINT = 'local_list.php'; // atau 'api/local_list'
+    const ENDPOINT = 'api/local_list'; // atau 'api/local_list'
     const j = await r.json();
     if(!j.ok) throw new Error('API error');
     let items = j.items || [];
