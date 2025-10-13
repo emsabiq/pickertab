@@ -45,11 +45,13 @@ async function writeManifestFile(filePath, json) {
   const tmpPath = `${filePath}.tmp`;
   await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
 
+  const renameFallbackCodes = ['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY', 'EACCES', 'EBUSY'];
+
   try {
     await fs.promises.rename(tmpPath, filePath);
     return;
   } catch (err) {
-    if (!['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY'].includes(err.code)) {
+    if (!renameFallbackCodes.includes(err.code)) {
       throw err;
     }
   }
