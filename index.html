@@ -123,8 +123,22 @@ async function load(){
   try {
     const data = await fetchManifestData();
     if (!data) return;
-    if (!state.rev || state.rev !== data.rev) {
-      state = data;
+    const currentRev = Number(state?.rev) || 0;
+    const incomingRev = Number(data?.rev) || 0;
+    const currentUpdatedAt = state?.updatedAt ?? '';
+    const incomingUpdatedAt = data?.updatedAt ?? '';
+    const updatedChanged = `${currentUpdatedAt}` !== `${incomingUpdatedAt}`;
+    const shouldRefresh =
+      !Array.isArray(state.tabs) || !state.tabs.length ||
+      currentRev !== incomingRev ||
+      updatedChanged;
+
+    if (shouldRefresh) {
+      state = {
+        ...data,
+        rev: incomingRev,
+        updatedAt: incomingUpdatedAt ? `${incomingUpdatedAt}` : '',
+      };
       if (typeof state.activeIndex !== 'number') state.activeIndex = 0;
       renderTabs();
       renderViewer();
