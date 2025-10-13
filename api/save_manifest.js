@@ -1,6 +1,22 @@
 const fs = require('fs');
 const path = require('path');
-const { ADMIN_PIN, MANIFEST_PATH } = require('./config');
+const {
+  ADMIN_PIN,
+  MANIFEST_PATH,
+  MANIFEST_FALLBACK_PATH,
+} = require('./config');
+
+const WRITE_FALLBACK_CODES = new Set(['EACCES', 'EPERM', 'EROFS']);
+
+class ManifestWriteError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'ManifestWriteError';
+    this.statusCode = options.statusCode || 500;
+    this.expose = options.expose ?? true;
+    this.details = options.details || null;
+  }
+}
 
 function sanitizeId(value) {
   return String(value ?? '')
@@ -41,23 +57,89 @@ async function ensureDirExists(filePath) {
   }
 }
 
-async function writeManifestFile(filePath, json) {
-  const tmpPath = `${filePath}.tmp`;
-  await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
-
-  const renameFallbackCodes = ['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY', 'EACCES', 'EBUSY'];
+async function writeFallbackManifest(filePath, json, originalError) {
+  await ensureDirExists(filePath);
 
   try {
-    await fs.promises.rename(tmpPath, filePath);
-    return;
-  } catch (err) {
-    if (!renameFallbackCodes.includes(err.code)) {
+    await fs.promises.writeFile(filePath, json, { encoding: 'utf8' });
+    return {
+      path: filePath,
+      fallback: {
+        type: 'direct',
+        reason: originalError.code,
+        originalPath: filePath,
+        message: 'Atomic manifest write failed; wrote directly to manifest path instead.',
+      },
+    };
+  } catch (directError) {
+    if (MANIFEST_FALLBACK_PATH) {
+      await ensureDirExists(MANIFEST_FALLBACK_PATH);
+      await fs.promises.writeFile(MANIFEST_FALLBACK_PATH, json, { encoding: 'utf8' });
+      return {
+        path: MANIFEST_FALLBACK_PATH,
+        fallback: {
+          type: 'alternate',
+          reason: originalError.code,
+          originalPath: filePath,
+          path: MANIFEST_FALLBACK_PATH,
+          message: 'Atomic manifest write failed; wrote to alternate manifest path instead.',
+        },
+      };
+    }
+
+    throw new ManifestWriteError(
+      `Unable to write manifest to ${filePath}. The path is not writable and no fallback path is configured.`,
+      {
+        statusCode: 500,
+        details: {
+          path: filePath,
+          code: directError.code || originalError.code,
+        },
+      },
+    );
+  }
+}
+
+async function writeManifestFile(filePath, json) {
+  const tmpPath = `${filePath}.tmp`;
+  let tmpCreated = false;
+
+  try {
+    try {
+      await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
+      tmpCreated = true;
+    } catch (err) {
+      if (WRITE_FALLBACK_CODES.has(err.code)) {
+        return await writeFallbackManifest(filePath, json, err);
+      }
       throw err;
     }
-  }
 
-  await fs.promises.copyFile(tmpPath, filePath);
-  await fs.promises.unlink(tmpPath);
+    const renameFallbackCodes = ['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY', 'EACCES', 'EBUSY'];
+
+    try {
+      await fs.promises.rename(tmpPath, filePath);
+      tmpCreated = false;
+      return { path: filePath, fallback: null };
+    } catch (err) {
+      if (!renameFallbackCodes.includes(err.code)) {
+        throw err;
+      }
+    }
+
+    await fs.promises.copyFile(tmpPath, filePath);
+    await fs.promises.unlink(tmpPath);
+    tmpCreated = false;
+    return { path: filePath, fallback: null };
+  } finally {
+    if (tmpCreated) {
+      try {
+        await fs.promises.unlink(tmpPath);
+      } catch (cleanupErr) {
+        if (cleanupErr.code !== 'ENOENT') throw cleanupErr;
+      }
+    }
+  }
 }
 
 module.exports = async (req, res) => {
@@ -99,10 +181,26 @@ module.exports = async (req, res) => {
     const json = JSON.stringify(manifest, null, 2);
 
     await ensureDirExists(MANIFEST_PATH);
-    await writeManifestFile(MANIFEST_PATH, json);
+    const result = await writeManifestFile(MANIFEST_PATH, json);
 
-    res.status(200).json({ ok: true, manifest });
+    const responseBody = { ok: true, manifest };
+    if (result && result.fallback) {
+      responseBody.fallback = result.fallback;
+      responseBody.location = result.path;
+    }
+
+    res.status(200).json(responseBody);
   } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
+    const statusCode = err.statusCode || 500;
+    const expose = err.expose ?? false;
+    const payload = {
+      error: expose ? err.message : 'Internal Server Error',
+    };
+
+    if (expose && err.details) {
+      payload.details = err.details;
+    }
+
+    res.status(statusCode).json(payload);
   }
 };

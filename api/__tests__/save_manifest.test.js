@@ -28,9 +28,11 @@ test('falls back when rename fails with EACCES', async (t) => {
   const manifestPath = path.join(tmpDir, 'manifest.json');
   const originalAdminPin = process.env.ADMIN_PIN;
   const originalManifestPath = process.env.MANIFEST_PATH;
+  const originalFallbackPath = process.env.MANIFEST_FALLBACK_PATH;
 
   process.env.ADMIN_PIN = 'PIN123';
   process.env.MANIFEST_PATH = manifestPath;
+  delete process.env.MANIFEST_FALLBACK_PATH;
 
   // Ensure modules use updated environment variables.
   delete require.cache[require.resolve('../config')];
@@ -70,6 +72,7 @@ test('falls back when rename fails with EACCES', async (t) => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
     assert.equal(res.body.manifest.rev, 1);
+    assert.equal(res.body.fallback, undefined);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.rev, 1);
@@ -85,6 +88,93 @@ test('falls back when rename fails with EACCES', async (t) => {
       delete process.env.MANIFEST_PATH;
     } else {
       process.env.MANIFEST_PATH = originalManifestPath;
+    }
+    if (originalFallbackPath === undefined) {
+      delete process.env.MANIFEST_FALLBACK_PATH;
+    } else {
+      process.env.MANIFEST_FALLBACK_PATH = originalFallbackPath;
+    }
+    delete require.cache[require.resolve('../save_manifest')];
+    delete require.cache[require.resolve('../config')];
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('writes manifest directly when tmp write fails with EACCES', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'save-manifest-'));
+  const manifestPath = path.join(tmpDir, 'manifest.json');
+  const tmpPath = `${manifestPath}.tmp`;
+  const originalAdminPin = process.env.ADMIN_PIN;
+  const originalManifestPath = process.env.MANIFEST_PATH;
+  const originalFallbackPath = process.env.MANIFEST_FALLBACK_PATH;
+
+  process.env.ADMIN_PIN = 'PIN123';
+  process.env.MANIFEST_PATH = manifestPath;
+  delete process.env.MANIFEST_FALLBACK_PATH;
+
+  delete require.cache[require.resolve('../config')];
+  delete require.cache[require.resolve('../save_manifest')];
+
+  const originalWriteFile = fs.promises.writeFile;
+  const writeTargets = [];
+  fs.promises.writeFile = async (targetPath, ...rest) => {
+    writeTargets.push(targetPath);
+    if (targetPath === tmpPath) {
+      const err = new Error('permission denied');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return originalWriteFile(targetPath, ...rest);
+  };
+
+  const req = {
+    body: {
+      pin: 'PIN123',
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Example',
+          type: 'link',
+          url: 'https://example.com',
+        },
+      ],
+      activeIndex: 0,
+    },
+  };
+  const res = createMockRes();
+
+  try {
+    const saveManifest = require('../save_manifest');
+    await saveManifest(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.location, manifestPath);
+    assert.equal(res.body.fallback.type, 'direct');
+    assert.equal(res.body.fallback.reason, 'EACCES');
+    assert.equal(res.body.fallback.originalPath, manifestPath);
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.equal(manifest.rev, 1);
+    assert.equal(fs.existsSync(tmpPath), false);
+    assert(writeTargets.includes(tmpPath));
+    assert(writeTargets.includes(manifestPath));
+  } finally {
+    fs.promises.writeFile = originalWriteFile;
+    if (originalAdminPin === undefined) {
+      delete process.env.ADMIN_PIN;
+    } else {
+      process.env.ADMIN_PIN = originalAdminPin;
+    }
+    if (originalManifestPath === undefined) {
+      delete process.env.MANIFEST_PATH;
+    } else {
+      process.env.MANIFEST_PATH = originalManifestPath;
+    }
+    if (originalFallbackPath === undefined) {
+      delete process.env.MANIFEST_FALLBACK_PATH;
+    } else {
+      process.env.MANIFEST_FALLBACK_PATH = originalFallbackPath;
     }
     delete require.cache[require.resolve('../save_manifest')];
     delete require.cache[require.resolve('../config')];
