@@ -36,6 +36,10 @@
 let state = { rev: 0, activeIndex: 0, tabs: [], updatedAt: '' };
 
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
+function isLocal(url){
+  // anggap lokal jika mengarah ke folder assets di domain ini
+  return url.startsWith('/assets/') || url.startsWith('/boss-tabs/assets/');
+}
 
 function renderTabs(){
   const wrap = document.getElementById('tabButtons');
@@ -57,20 +61,21 @@ function renderViewer(){
     return;
   }
   const item = state.tabs[state.activeIndex] || state.tabs[0];
-  const isLocal = item.url.startsWith('/assets/');
+  const local = isLocal(item.url);
+
   if (item.type === 'image') {
     const img = document.createElement('img');
-    img.src = isLocal ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
+    img.src = local ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
     img.alt = item.title;
     viewer.appendChild(img);
   } else if (item.type === 'link') {
     const ifr = document.createElement('iframe');
-    ifr.src = item.url; // link selalu langsung
+    ifr.src = item.url; // link langsung
     ifr.title = item.title;
     viewer.appendChild(ifr);
   } else { // pdf
     const ifr = document.createElement('iframe');
-    ifr.src = isLocal ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
+    ifr.src = local ? item.url : ('proxy.php?url=' + encodeURIComponent(item.url));
     ifr.title = item.title;
     viewer.appendChild(ifr);
   }
