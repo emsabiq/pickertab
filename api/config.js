@@ -20,6 +20,9 @@ const ADMIN_PIN = process.env.ADMIN_PIN ? String(process.env.ADMIN_PIN) : '12345
 const MANIFEST_PATH = process.env.MANIFEST_PATH
   ? path.resolve(process.cwd(), process.env.MANIFEST_PATH)
   : path.resolve(process.cwd(), 'manifest.json');
+const MANIFEST_FALLBACK_PATH = process.env.MANIFEST_FALLBACK_PATH
+  ? path.resolve(process.cwd(), process.env.MANIFEST_FALLBACK_PATH)
+  : null;
 
 const envHosts = parseHosts(process.env.ALLOWED_HOSTS);
 const ALLOWED_HOSTS = envHosts.length ? envHosts : DEFAULT_ALLOWED_HOSTS;
@@ -41,6 +44,7 @@ function hostAllowed(host) {
 module.exports = {
   ADMIN_PIN,
   MANIFEST_PATH,
+  MANIFEST_FALLBACK_PATH,
   ALLOWED_HOSTS,
   hostAllowed,
 };

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { ADMIN_PIN, MANIFEST_PATH } = require('./config');
+const { ADMIN_PIN, MANIFEST_PATH, MANIFEST_FALLBACK_PATH } = require('./config');
 
 function sanitizeId(value) {
   return String(value ?? '')
@@ -43,21 +43,65 @@ async function ensureDirExists(filePath) {
 
 async function writeManifestFile(filePath, json) {
   const tmpPath = `${filePath}.tmp`;
-  await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
-
+  const writeFallbackCodes = new Set(['EACCES', 'EPERM', 'EROFS']);
   const renameFallbackCodes = ['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY', 'EACCES', 'EBUSY'];
+  let tmpCreated = false;
+  let cleanupError = null;
 
   try {
-    await fs.promises.rename(tmpPath, filePath);
-    return;
+    await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
+    tmpCreated = true;
+
+    try {
+      await fs.promises.rename(tmpPath, filePath);
+      tmpCreated = false;
+      return { path: filePath, fallback: false };
+    } catch (err) {
+      if (!renameFallbackCodes.includes(err.code)) {
+        throw err;
+      }
+    }
+
+    await fs.promises.copyFile(tmpPath, filePath);
+    await fs.promises.unlink(tmpPath);
+    tmpCreated = false;
+    return { path: filePath, fallback: false };
   } catch (err) {
-    if (!renameFallbackCodes.includes(err.code)) {
-      throw err;
+    if (writeFallbackCodes.has(err.code) && !tmpCreated) {
+      const fallbackPath = MANIFEST_FALLBACK_PATH || filePath;
+      await ensureDirExists(fallbackPath);
+      try {
+        await fs.promises.writeFile(fallbackPath, json, { encoding: 'utf8' });
+      } catch (fallbackErr) {
+        fallbackErr.code = fallbackErr.code || err.code;
+        fallbackErr.originalError = err;
+        fallbackErr.message = `Unable to write manifest to fallback path ${fallbackPath}: ${fallbackErr.message}`;
+        throw fallbackErr;
+      }
+
+      return {
+        path: fallbackPath,
+        fallback: true,
+        reason: err,
+      };
+    }
+
+    throw err;
+  } finally {
+    if (tmpCreated) {
+      try {
+        await fs.promises.unlink(tmpPath);
+      } catch (cleanupErr) {
+        if (cleanupErr && cleanupErr.code !== 'ENOENT') {
+          cleanupError = cleanupErr;
+        }
+      }
+    }
+
+    if (cleanupError) {
+      throw cleanupError;
     }
   }
-
-  await fs.promises.copyFile(tmpPath, filePath);
-  await fs.promises.unlink(tmpPath);
 }
 
 module.exports = async (req, res) => {
@@ -99,10 +143,25 @@ module.exports = async (req, res) => {
     const json = JSON.stringify(manifest, null, 2);
 
     await ensureDirExists(MANIFEST_PATH);
-    await writeManifestFile(MANIFEST_PATH, json);
+    const result = await writeManifestFile(MANIFEST_PATH, json);
 
-    res.status(200).json({ ok: true, manifest });
+    const payload = { ok: true, manifest };
+    if (result.fallback) {
+      payload.warning = result.path === MANIFEST_PATH
+        ? `Manifest saved using non-atomic fallback. Check permissions for ${MANIFEST_PATH}.`
+        : `Manifest saved to fallback path ${result.path}. Check permissions for ${MANIFEST_PATH}.`;
+    }
+
+    res.status(200).json(payload);
   } catch (err) {
-    res.status(500).json({ error: 'Internal Server Error' });
+    const message = err && err.message ? err.message : 'Unknown error';
+    const code = err && err.code ? err.code : undefined;
+    res.status(500).json({
+      error: 'Failed to save manifest',
+      message,
+      code,
+      manifestPath: MANIFEST_PATH,
+      fallbackPath: MANIFEST_FALLBACK_PATH || null,
+    });
   }
 };
