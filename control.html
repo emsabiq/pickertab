@@ -143,6 +143,26 @@ function uid(){ return Math.random().toString(36).slice(2); }
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
 function isLocal(url){ return url.startsWith('/assets/') || url.startsWith('/boss-tabs/assets/'); }
 
+async function fetchManifestData(){
+  const ts = Date.now();
+  const sources = [`manifest.json?ts=${ts}`, `/api/manifest?ts=${ts}`];
+
+  for (const url of sources) {
+    try {
+      const res = await fetch(url, { cache:'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data && typeof data === 'object' && Array.isArray(data.tabs)) {
+        return data;
+      }
+    } catch (err) {
+      // continue to the next source
+    }
+  }
+
+  return null;
+}
+
 function renderList(){
   tabBody.innerHTML='';
   manifest.tabs.forEach((t, i) => {
@@ -180,10 +200,9 @@ new Sortable(tabBody, {
 
 async function loadManifest(){
   try{
-    const r = await fetch('manifest.json?ts='+Date.now(), { cache:'no-store' });
-    if(r.ok){
-      const m = await r.json();
-      if (Array.isArray(m.tabs)) manifest = m;
+    const data = await fetchManifestData();
+    if (data) {
+      manifest = data;
       renderList();
     }
   }catch(e){}
