@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const { ADMIN_PIN, MANIFEST_PATH } = require('./config');
 
 function sanitizeId(value) {
@@ -30,6 +31,31 @@ async function readOldManifest() {
   } catch (err) {
     return null;
   }
+}
+
+async function ensureDirExists(filePath) {
+  try {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+}
+
+async function writeManifestFile(filePath, json) {
+  const tmpPath = `${filePath}.tmp`;
+  await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
+
+  try {
+    await fs.promises.rename(tmpPath, filePath);
+    return;
+  } catch (err) {
+    if (!['EXDEV', 'EEXIST', 'EPERM', 'ENOTEMPTY'].includes(err.code)) {
+      throw err;
+    }
+  }
+
+  await fs.promises.copyFile(tmpPath, filePath);
+  await fs.promises.unlink(tmpPath);
 }
 
 module.exports = async (req, res) => {
@@ -68,19 +94,13 @@ module.exports = async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
 
-    const tmpPath = `${MANIFEST_PATH}.tmp`;
     const json = JSON.stringify(manifest, null, 2);
 
-    await fs.promises.writeFile(tmpPath, json, { encoding: 'utf8' });
-    await fs.promises.rename(tmpPath, MANIFEST_PATH);
+    await ensureDirExists(MANIFEST_PATH);
+    await writeManifestFile(MANIFEST_PATH, json);
 
     res.status(200).json({ ok: true, manifest });
   } catch (err) {
-    try {
-      await fs.promises.unlink(`${MANIFEST_PATH}.tmp`);
-    } catch (e) {
-      // ignore
-    }
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };
