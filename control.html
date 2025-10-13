@@ -201,17 +201,49 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+const publishTargets = [
+  { url: '/api/save_manifest', fallbackStatuses: [404] },
+  { url: 'save_manifest.php', fallbackStatuses: [] }
+];
+
+async function sendPublish(payload){
+  let lastMessage = 'Unknown error';
+  for (let i = 0; i < publishTargets.length; i++) {
+    const target = publishTargets[i];
+    let response;
+    try {
+      response = await fetch(target.url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    } catch (err) {
+      lastMessage = err && err.message ? err.message : String(err);
+      if (i === publishTargets.length - 1) throw new Error(lastMessage);
+      continue;
+    }
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return data;
+    const message = data && data.error ? data.error : (response.statusText || String(response.status));
+    if (target.fallbackStatuses.includes(response.status) && i < publishTargets.length - 1) {
+      lastMessage = message;
+      continue;
+    }
+    throw new Error(message);
+  }
+  throw new Error(lastMessage);
+}
+
 // Publish
 btnPublish.onclick = async () => {
   const pin = document.getElementById('pin').value;
   if(!pin){ alert('Masukkan PIN'); return; }
   const payload = { ...manifest, pin };
-  const r = await fetch('/api/save_manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) { alert('Gagal publish: ' + (j.error||r.status)); return; }
-  manifest = j.manifest || manifest;
-  toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
-  toast.show();
+  try {
+    const j = await sendPublish(payload);
+    manifest = j.manifest || manifest;
+    toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
+    toast.show();
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    alert('Gagal publish: ' + message);
+  }
 };
 
 // ===== Local Picker (/assets) =====
