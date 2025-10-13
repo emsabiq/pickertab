@@ -32,6 +32,7 @@ test('falls back when rename fails with EACCES', async (t) => {
 
   process.env.ADMIN_PIN = 'PIN123';
   process.env.MANIFEST_PATH = manifestPath;
+  delete process.env.MANIFEST_FALLBACK_PATH;
 
   // Ensure modules use updated environment variables.
   delete require.cache[require.resolve('../config')];
@@ -71,6 +72,7 @@ test('falls back when rename fails with EACCES', async (t) => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
     assert.equal(res.body.manifest.rev, 1);
+    assert.equal(res.body.fallback, undefined);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.rev, 1);
@@ -98,9 +100,10 @@ test('falls back when rename fails with EACCES', async (t) => {
   }
 });
 
-test('falls back to direct write when tmp write fails with EACCES', async (t) => {
+test('writes manifest directly when tmp write fails with EACCES', async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'save-manifest-'));
   const manifestPath = path.join(tmpDir, 'manifest.json');
+  const tmpPath = `${manifestPath}.tmp`;
   const originalAdminPin = process.env.ADMIN_PIN;
   const originalManifestPath = process.env.MANIFEST_PATH;
   const originalFallbackPath = process.env.MANIFEST_FALLBACK_PATH;
@@ -113,15 +116,15 @@ test('falls back to direct write when tmp write fails with EACCES', async (t) =>
   delete require.cache[require.resolve('../save_manifest')];
 
   const originalWriteFile = fs.promises.writeFile;
-  let tmpWriteAttempts = 0;
-  fs.promises.writeFile = async (targetPath, ...args) => {
-    if (targetPath.endsWith('.tmp')) {
-      tmpWriteAttempts += 1;
-      const error = new Error('permission denied');
-      error.code = 'EACCES';
-      throw error;
+  const writeTargets = [];
+  fs.promises.writeFile = async (targetPath, ...rest) => {
+    writeTargets.push(targetPath);
+    if (targetPath === tmpPath) {
+      const err = new Error('permission denied');
+      err.code = 'EACCES';
+      throw err;
     }
-    return originalWriteFile(targetPath, ...args);
+    return originalWriteFile(targetPath, ...rest);
   };
 
   const req = {
@@ -144,14 +147,18 @@ test('falls back to direct write when tmp write fails with EACCES', async (t) =>
     const saveManifest = require('../save_manifest');
     await saveManifest(req, res);
 
-    assert.equal(tmpWriteAttempts, 1);
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
-    assert.ok(res.body.warning.includes('non-atomic fallback'));
+    assert.equal(res.body.location, manifestPath);
+    assert.equal(res.body.fallback.type, 'direct');
+    assert.equal(res.body.fallback.reason, 'EACCES');
+    assert.equal(res.body.fallback.originalPath, manifestPath);
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.rev, 1);
-    assert.equal(fs.existsSync(`${manifestPath}.tmp`), false);
+    assert.equal(fs.existsSync(tmpPath), false);
+    assert(writeTargets.includes(tmpPath));
+    assert(writeTargets.includes(manifestPath));
   } finally {
     fs.promises.writeFile = originalWriteFile;
     if (originalAdminPin === undefined) {
