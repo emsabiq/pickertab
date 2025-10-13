@@ -10,6 +10,7 @@
     { "src": "api/*.js", "use": "@vercel/node" }
   ],
   "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
     { "src": "/", "dest": "/index.html" },
     { "src": "/control", "dest": "/control.html" },
     { "src": "/control.html", "dest": "/control.html" },
