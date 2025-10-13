@@ -68,20 +68,22 @@ async function writeFallbackManifest(filePath, json, originalError) {
         type: 'direct',
         reason: originalError.code,
         originalPath: filePath,
+        path: filePath,
         message: 'Atomic manifest write failed; wrote directly to manifest path instead.',
       },
     };
   } catch (directError) {
     if (MANIFEST_FALLBACK_PATH) {
-      await ensureDirExists(MANIFEST_FALLBACK_PATH);
-      await fs.promises.writeFile(MANIFEST_FALLBACK_PATH, json, { encoding: 'utf8' });
+      const fallbackPath = MANIFEST_FALLBACK_PATH;
+      await ensureDirExists(fallbackPath);
+      await fs.promises.writeFile(fallbackPath, json, { encoding: 'utf8' });
       return {
-        path: MANIFEST_FALLBACK_PATH,
+        path: fallbackPath,
         fallback: {
           type: 'alternate',
-          reason: originalError.code,
+          reason: directError.code || originalError.code,
           originalPath: filePath,
-          path: MANIFEST_FALLBACK_PATH,
+          path: fallbackPath,
           message: 'Atomic manifest write failed; wrote to alternate manifest path instead.',
         },
       };
