@@ -27,6 +27,11 @@ function resolveAssetsRoot() {
     }
   }
 
+  const candidates = [
+    path.resolve(process.cwd(), 'assets'),
+    path.resolve(process.cwd(), 'public/assets'),
+  ];
+
   for (const dir of candidates) {
     try {
       const stat = fs.statSync(dir);
