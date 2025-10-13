@@ -49,16 +49,37 @@ async function readOldManifest() {
   }
 }
 
-async function ensureDirExists(filePath) {
+const PERMISSION_DENIED_CODES = new Set(['EACCES', 'EPERM', 'EROFS']);
+
+async function ensureDirExists(filePath, options = {}) {
+  const { toleratePermissions = false } = options;
+  const dirPath = path.dirname(filePath);
   try {
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.mkdir(dirPath, { recursive: true });
   } catch (err) {
-    if (err.code !== 'EEXIST') throw err;
+    if (err.code === 'EEXIST') {
+      return;
+    }
+
+    if (toleratePermissions && PERMISSION_DENIED_CODES.has(err.code)) {
+      try {
+        const stats = await fs.promises.stat(dirPath);
+        if (stats.isDirectory()) {
+          return;
+        }
+      } catch (statErr) {
+        if (statErr.code !== 'ENOENT') {
+          throw statErr;
+        }
+      }
+    }
+
+    throw err;
   }
 }
 
 async function writeFallbackManifest(filePath, json, originalError) {
-  await ensureDirExists(filePath);
+  await ensureDirExists(filePath, { toleratePermissions: true });
 
   try {
     await fs.promises.writeFile(filePath, json, { encoding: 'utf8' });
@@ -182,7 +203,7 @@ module.exports = async (req, res) => {
 
     const json = JSON.stringify(manifest, null, 2);
 
-    await ensureDirExists(MANIFEST_PATH);
+    await ensureDirExists(MANIFEST_PATH, { toleratePermissions: true });
     const result = await writeManifestFile(MANIFEST_PATH, json);
 
     const responseBody = { ok: true, manifest };

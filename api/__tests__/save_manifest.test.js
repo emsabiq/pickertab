@@ -190,6 +190,7 @@ test('writes to default fallback path when manifest is not writable', async (t) 
   const originalAdminPin = process.env.ADMIN_PIN;
   const originalManifestPath = process.env.MANIFEST_PATH;
   const originalFallbackPath = process.env.MANIFEST_FALLBACK_PATH;
+  const originalMkdir = fs.promises.mkdir;
 
   process.env.ADMIN_PIN = 'PIN123';
   process.env.MANIFEST_PATH = manifestPath;
@@ -200,6 +201,15 @@ test('writes to default fallback path when manifest is not writable', async (t) 
 
   const originalWriteFile = fs.promises.writeFile;
   const writeTargets = [];
+
+  fs.promises.mkdir = async (targetPath, ...rest) => {
+    if (targetPath === path.dirname(manifestPath)) {
+      const err = new Error('read-only file system');
+      err.code = 'EROFS';
+      throw err;
+    }
+    return originalMkdir(targetPath, ...rest);
+  };
 
   fs.promises.writeFile = async (targetPath, ...rest) => {
     writeTargets.push(targetPath);
@@ -254,6 +264,7 @@ test('writes to default fallback path when manifest is not writable', async (t) 
     assert.equal(manifest.rev, 1);
   } finally {
     fs.promises.writeFile = originalWriteFile;
+    fs.promises.mkdir = originalMkdir;
     if (fallbackExisted) {
       fs.writeFileSync(defaultFallbackPath, fallbackBackup);
     } else {
