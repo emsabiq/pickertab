@@ -236,6 +236,52 @@ async function publishManifest(payload){
   const DEFAULT_FALLBACK_PATH = '/tmp/manifest.json';
   let lastError = null;
 
+  const normalizePath = (value) => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('file://')) {
+      try {
+        const fileUrl = new URL(trimmed);
+        return fileUrl.pathname || null;
+      } catch (err) {
+        return trimmed.slice('file://'.length) || null;
+      }
+    }
+    return trimmed;
+  };
+
+  const extractErrorMessage = (data) => {
+    if (!data || typeof data !== 'object') return null;
+
+    const pickMessage = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') {
+        const msg = value.trim();
+        return msg || null;
+      }
+      if (typeof value === 'object') {
+        const nested = pickMessage(value.message || value.detail || value.error);
+        if (nested) return nested;
+      }
+      return null;
+    };
+
+    const direct = pickMessage(data.error) || pickMessage(data.message);
+    if (direct) return direct;
+
+    if (Array.isArray(data.errors)) {
+      for (const entry of data.errors) {
+        const msg = pickMessage(entry);
+        if (msg) return msg;
+      }
+    }
+
+    return null;
+  };
+
+  const isDefaultFallback = (value) => normalizePath(value) === DEFAULT_FALLBACK_PATH;
+
   for (const url of endpoints) {
     try {
       const response = await fetch(url, {
@@ -244,25 +290,29 @@ async function publishManifest(payload){
         body: JSON.stringify(payload),
       });
       const data = await response.json().catch(() => ({}));
+      const apiErrorMessage = extractErrorMessage(data);
       if (!response.ok) {
-        lastError = new Error(data.error || `HTTP ${response.status}`);
+        lastError = new Error(apiErrorMessage || `HTTP ${response.status}`);
         continue;
       }
 
       const fallbackInfo = data && typeof data === 'object' ? data.fallback : null;
-      const fallbackPath = (
-        data && typeof data === 'object' && typeof data.location === 'string'
-          ? data.location
-          : null
-      ) || (fallbackInfo && typeof fallbackInfo.path === 'string' ? fallbackInfo.path : null);
-      if (fallbackPath === DEFAULT_FALLBACK_PATH) {
-        lastError = new Error(`Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`);
+      const failureDetected = [
+        data && typeof data === 'object' ? data.location : null,
+        fallbackInfo && typeof fallbackInfo.path === 'string' ? fallbackInfo.path : null,
+        fallbackInfo && typeof fallbackInfo.location === 'string' ? fallbackInfo.location : null,
+      ].some(isDefaultFallback);
+
+      if (failureDetected) {
+        const fallbackMessage = apiErrorMessage || `Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`;
+        lastError = new Error(fallbackMessage);
         continue;
       }
 
       return data;
     } catch (err) {
-      lastError = err;
+      const message = (err && err.message) ? err.message : null;
+      lastError = new Error(message || `Gagal publish melalui ${url}`);
     }
   }
 

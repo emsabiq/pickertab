@@ -33,7 +33,7 @@ function createStubElement() {
   };
 }
 
-function createControlContext() {
+function createControlContext(options = {}) {
   const tabBody = Object.assign(createStubElement(), {
     appendChild(child) {
       this.children.push(child);
@@ -126,6 +126,11 @@ function createControlContext() {
 
   function Sortable() {}
 
+  const alertFn = typeof options.alert === 'function' ? options.alert : () => {};
+  const fetchFn = typeof options.fetch === 'function'
+    ? options.fetch
+    : async () => ({ ok: false, status: 500, json: async () => ({}) });
+
   const windowObj = {
     document,
     localStorage,
@@ -139,10 +144,10 @@ function createControlContext() {
     localStorage,
     bootstrap,
     Sortable,
-    fetch: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+    fetch: fetchFn,
     setTimeout,
     clearTimeout,
-    alert: () => {},
+    alert: alertFn,
   };
 
   Object.assign(windowObj, {
@@ -154,6 +159,8 @@ function createControlContext() {
     btnAdd,
     btnPublish,
     btnPick,
+    fetch: fetchFn,
+    alert: alertFn,
   });
 
   Object.assign(context, {
@@ -275,4 +282,170 @@ test('publishManifest retries when default fallback path is only reported via lo
   assert.equal(call, 2, 'should try the secondary endpoint after default fallback location');
   assert.deepEqual(result, responses[1].body);
   assert.deepEqual(calledUrls, ['/api/save_manifest', '/save_manifest.php']);
+});
+
+test('publishManifest retries when fallback.path is default temp path but location differs', async () => {
+  const context = createControlContext();
+  vm.runInNewContext(inlineScript, context);
+
+  const publishManifest = context.window.__control.publishManifest;
+  const responses = [
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        location: '/api/manifest',
+        fallback: { type: 'alternate', path: '/tmp/manifest.json' },
+      },
+    },
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        manifest: { rev: 12, tabs: [], updatedAt: '2024-03-03T00:00:00.000Z' },
+      },
+    },
+  ];
+
+  let call = 0;
+  const calledUrls = [];
+  context.fetch = async (url) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    }
+
+    calledUrls.push(url);
+    const res = responses[call];
+    call += 1;
+    if (!res) {
+      throw new Error(`Unexpected fetch call for ${url}. Calls so far: ${calledUrls.join(', ')}`);
+    }
+    return {
+      ok: res.ok,
+      status: res.status,
+      json: async () => res.body,
+    };
+  };
+
+  const result = await publishManifest({ tabs: [], pin: '123456' });
+  assert.equal(call, 2, 'should attempt backup endpoint if fallback.path is default temp path');
+  assert.deepEqual(result, responses[1].body);
+  assert.deepEqual(calledUrls, ['/api/save_manifest', '/save_manifest.php']);
+});
+
+test('publishManifest retries when backend reports file:// URL for default fallback path', async () => {
+  const context = createControlContext();
+  vm.runInNewContext(inlineScript, context);
+
+  const publishManifest = context.window.__control.publishManifest;
+  const responses = [
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        fallback: { type: 'alternate', path: 'file:///tmp/manifest.json' },
+      },
+    },
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        manifest: { rev: 13, tabs: [], updatedAt: '2024-04-04T00:00:00.000Z' },
+      },
+    },
+  ];
+
+  let call = 0;
+  const calledUrls = [];
+  context.fetch = async (url) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    }
+
+    calledUrls.push(url);
+    const res = responses[call];
+    call += 1;
+    if (!res) {
+      throw new Error(`Unexpected fetch call for ${url}. Calls so far: ${calledUrls.join(', ')}`);
+    }
+    return {
+      ok: res.ok,
+      status: res.status,
+      json: async () => res.body,
+    };
+  };
+
+  const result = await publishManifest({ tabs: [], pin: '123456' });
+  assert.equal(call, 2, 'should retry when backend returns file:// default fallback path');
+  assert.deepEqual(result, responses[1].body);
+  assert.deepEqual(calledUrls, ['/api/save_manifest', '/save_manifest.php']);
+});
+
+test('publish click handler surfaces backend error messages nested in objects', async () => {
+  const alerts = [];
+  const context = createControlContext({
+    alert: (msg) => {
+      alerts.push(msg);
+    },
+  });
+  vm.runInNewContext(inlineScript, context);
+
+  context.document.getElementById('pin').value = '7890';
+
+  const responses = [
+    {
+      ok: false,
+      status: 500,
+      body: { error: { message: 'Backend primer down' } },
+    },
+    {
+      ok: false,
+      status: 502,
+      body: { message: 'Backend sekunder offline' },
+    },
+  ];
+
+  let call = 0;
+  context.fetch = async (url, opts = {}) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+
+    if (opts && opts.method === 'POST') {
+      const res = responses[call];
+      call += 1;
+      if (!res) {
+        throw new Error(`Unexpected publish call for ${url}`);
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        json: async () => res.body,
+      };
+    }
+
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  await context.btnPublish.onclick();
+
+  assert.equal(call, 2, 'should try both backends before surfacing failure');
+  assert.equal(alerts.length, 1, 'should surface a single alert for the failure');
+  assert.equal(
+    alerts[0],
+    'Gagal publish: Backend sekunder offline. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'alert message should include backend-provided error text'
+  );
 });
