@@ -151,18 +151,39 @@ function renderMeta(){
   m.textContent = `Rev: ${state.rev} · Updated: ${state.updatedAt? state.updatedAt.replace('T',' ').replace('Z',''):''}`;
 }
 
+function parseRevision(value){
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string' || typeof value === 'boolean') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function revisionsEqual(a, b){
+  const aNum = parseRevision(a);
+  const bNum = parseRevision(b);
+  if (aNum !== null && bNum !== null) {
+    return aNum === bNum;
+  }
+  return `${a ?? ''}` === `${b ?? ''}`;
+}
+
 async function load(){
   try {
     const data = await fetchManifestData();
     if (!data) return;
-    const currentRev = Number(state?.rev) || 0;
-    const incomingRev = Number(data?.rev) || 0;
+    const currentRev = state?.rev;
+    const incomingRev = data?.rev;
     const currentUpdatedAt = state?.updatedAt ?? '';
     const incomingUpdatedAt = data?.updatedAt ?? '';
     const updatedChanged = `${currentUpdatedAt}` !== `${incomingUpdatedAt}`;
     const shouldRefresh =
       !Array.isArray(state.tabs) || !state.tabs.length ||
-      currentRev !== incomingRev ||
+      !revisionsEqual(currentRev, incomingRev) ||
       updatedChanged;
 
     if (shouldRefresh) {
