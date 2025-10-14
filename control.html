@@ -231,9 +231,152 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+function normalizeErrorText(value, visited = new Set()) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    let trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const parsedMessage = normalizeErrorText(parsed, visited);
+        if (parsedMessage) return parsedMessage;
+      } catch (err) {}
+    }
+
+    if (/\[object Object\]/i.test(trimmed)) {
+      trimmed = trimmed.replace(/\[object Object\]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    if (!trimmed || trimmed === '[object Object]' || /^Error:?$/i.test(trimmed)) return null;
+    return trimmed;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    return normalizeErrorText(value.message, visited);
+  }
+  if (typeof value === 'object') {
+    if (visited.has(value)) return null;
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const result = normalizeErrorText(entry, visited);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    const preferredKeys = ['message', 'detail', 'error', 'reason', 'description', 'info', 'text', 'cause'];
+    for (const key of preferredKeys) {
+      if (key in value) {
+        const result = normalizeErrorText(value[key], visited);
+        if (result) return result;
+      }
+    }
+
+    for (const key of Object.keys(value)) {
+      if (preferredKeys.includes(key)) continue;
+      const result = normalizeErrorText(value[key], visited);
+      if (result) return result;
+    }
+  }
+
+  return null;
+}
+
 async function publishManifest(payload){
   const endpoints = ['/api/save_manifest', '/save_manifest.php'];
+  const DEFAULT_FALLBACK_PATH = '/tmp/manifest.json';
+  const failures = [];
   let lastError = null;
+
+  const scrubMessage = (value) => {
+    if (typeof value !== 'string') return null;
+    let text = value.trim();
+    if (!text) return null;
+    if (/\[object\s+Object]/i.test(text)) {
+      text = text.replace(/\[object\s+Object]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+    if (!text) return null;
+    if (/^(true|false|null|undefined)$/i.test(text)) return null;
+    return text;
+  };
+
+  const recordFailure = (url, reason) => {
+    let message = null;
+    const normalized = normalizeErrorText(reason);
+    if (typeof normalized === 'string') {
+      message = scrubMessage(normalized);
+    } else if (typeof normalized === 'number' || typeof normalized === 'boolean' || typeof normalized === 'bigint') {
+      message = scrubMessage(String(normalized));
+    }
+
+    if (!message && typeof reason === 'string') {
+      message = scrubMessage(reason);
+    }
+    if (!message && (typeof reason === 'number' || typeof reason === 'boolean' || typeof reason === 'bigint')) {
+      message = scrubMessage(String(reason));
+    }
+
+    if (!message && reason && typeof reason === 'object') {
+      try {
+        const json = JSON.stringify(reason);
+        message = scrubMessage(json);
+      } catch (err) {}
+    }
+
+    if (!message) {
+      message = `Gagal publish melalui ${url}`;
+    }
+
+    failures.push({ url, message });
+    lastError = new Error(message);
+  };
+
+  const normalizePath = (value) => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('file://')) {
+      try {
+        const fileUrl = new URL(trimmed);
+        return fileUrl.pathname || null;
+      } catch (err) {
+        return trimmed.slice('file://'.length) || null;
+      }
+    }
+    return trimmed;
+  };
+
+  const extractErrorMessage = (data) => {
+    if (!data || typeof data !== 'object') return null;
+
+    const primaryFields = ['error', 'message', 'detail', 'description', 'reason'];
+    for (const field of primaryFields) {
+      if (field in data) {
+        const msg = normalizeErrorText(data[field]);
+        if (msg) return msg;
+      }
+    }
+
+    const collectionFields = ['errors', 'messages', 'details'];
+    for (const field of collectionFields) {
+      if (Array.isArray(data[field])) {
+        for (const entry of data[field]) {
+          const msg = normalizeErrorText(entry);
+          if (msg) return msg;
+        }
+      }
+    }
+
+    return normalizeErrorText(data);
+  };
+
+  const isDefaultFallback = (value) => normalizePath(value) === DEFAULT_FALLBACK_PATH;
 
   for (const url of endpoints) {
     try {
@@ -243,17 +386,52 @@ async function publishManifest(payload){
         body: JSON.stringify(payload),
       });
       const data = await response.json().catch(() => ({}));
+      const apiErrorMessage = extractErrorMessage(data);
       if (!response.ok) {
-        lastError = new Error(data.error || `HTTP ${response.status}`);
+        const message = scrubMessage(apiErrorMessage ?? '') || `HTTP ${response.status}`;
+        recordFailure(url, message);
         continue;
       }
+
+      const fallbackInfo = data && typeof data === 'object' ? data.fallback : null;
+      const failureDetected = [
+        data && typeof data === 'object' ? data.location : null,
+        fallbackInfo && typeof fallbackInfo.path === 'string' ? fallbackInfo.path : null,
+        fallbackInfo && typeof fallbackInfo.location === 'string' ? fallbackInfo.location : null,
+      ].some(isDefaultFallback);
+
+      if (failureDetected) {
+        const fallbackMessage = scrubMessage(apiErrorMessage ?? '')
+          || `Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`;
+        recordFailure(url, fallbackMessage);
+        continue;
+      }
+
       return data;
     } catch (err) {
-      lastError = err;
+      const rawDetail = normalizeErrorText(err && err.message)
+        || normalizeErrorText(err)
+        || (err && err.message)
+        || `Gagal publish melalui ${url}`;
+      const message = scrubMessage(typeof rawDetail === 'string' ? rawDetail : '')
+        || (typeof rawDetail === 'string' ? rawDetail.trim() : '')
+        || `Gagal publish melalui ${url}`;
+      recordFailure(url, message);
     }
   }
 
+  if (failures.length) {
+    const detail = failures
+      .map(({ url, message }) => `${url}: ${message}`)
+      .join(' | ');
+    throw new Error(detail);
+  }
+
   throw lastError || new Error('Gagal publish');
+}
+
+if (typeof window !== 'undefined') {
+  window.__control = Object.assign(window.__control || {}, { publishManifest });
 }
 
 // Publish
@@ -269,7 +447,27 @@ btnPublish.onclick = async () => {
     toast.show();
     notifyDisplay(manifest);
   } catch (err) {
-    alert('Gagal publish: ' + (err?.message || err));
+    const fallbackMsg = 'Tidak ada backend yang dapat menyimpan manifest secara permanen.';
+    const rawDetail = normalizeErrorText(err && err.message)
+      || (err && typeof err === 'object' ? normalizeErrorText(err) : null)
+      || fallbackMsg;
+
+    let trimmed = rawDetail ? rawDetail.trim() : '';
+    if (!trimmed) {
+      trimmed = fallbackMsg;
+    }
+
+    if (/\[object\s+Object]/i.test(trimmed)) {
+      trimmed = trimmed.replace(/\[object\s+Object]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    if (!trimmed || /\[object\s+Object]/i.test(trimmed)) {
+      trimmed = fallbackMsg;
+    }
+
+    const needsFallback = !trimmed.includes(fallbackMsg);
+    const suffix = needsFallback ? `${trimmed.endsWith('.') ? '' : '.'} ${fallbackMsg}` : '';
+    alert('Gagal publish: ' + trimmed + suffix);
   }
 };
 
