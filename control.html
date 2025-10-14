@@ -255,7 +255,7 @@ async function publishManifest(payload){
           ? data.location
           : null
       ) || (fallbackInfo && typeof fallbackInfo.path === 'string' ? fallbackInfo.path : null);
-      if (fallbackInfo && fallbackInfo.type === 'alternate' && fallbackPath === DEFAULT_FALLBACK_PATH) {
+      if (fallbackPath === DEFAULT_FALLBACK_PATH) {
         lastError = new Error(`Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`);
         continue;
       }

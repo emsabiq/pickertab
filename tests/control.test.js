@@ -222,3 +222,57 @@ test('publishManifest retries when primary backend reports default fallback path
   assert.deepEqual(result, responses[1].body);
   assert.deepEqual(calledUrls, ['/api/save_manifest', '/save_manifest.php']);
 });
+
+test('publishManifest retries when default fallback path is only reported via location', async () => {
+  const context = createControlContext();
+  vm.runInNewContext(inlineScript, context);
+
+  const publishManifest = context.window.__control.publishManifest;
+  const responses = [
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        location: '/tmp/manifest.json',
+      },
+    },
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        manifest: { rev: 10, tabs: [], updatedAt: '2024-02-02T00:00:00.000Z' },
+      },
+    },
+  ];
+
+  let call = 0;
+  const calledUrls = [];
+  context.fetch = async (url) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    }
+
+    calledUrls.push(url);
+    const res = responses[call];
+    call += 1;
+    if (!res) {
+      throw new Error(`Unexpected fetch call for ${url}. Calls so far: ${calledUrls.join(', ')}`);
+    }
+    return {
+      ok: res.ok,
+      status: res.status,
+      json: async () => res.body,
+    };
+  };
+
+  const result = await publishManifest({ tabs: [], pin: '123456' });
+  assert.equal(call, 2, 'should try the secondary endpoint after default fallback location');
+  assert.deepEqual(result, responses[1].body);
+  assert.deepEqual(calledUrls, ['/api/save_manifest', '/save_manifest.php']);
+});
