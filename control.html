@@ -231,9 +231,94 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+function normalizeErrorText(value, visited = new Set()) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '[object Object]') return null;
+    return trimmed;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    return normalizeErrorText(value.message, visited);
+  }
+  if (typeof value === 'object') {
+    if (visited.has(value)) return null;
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const result = normalizeErrorText(entry, visited);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    const preferredKeys = ['message', 'detail', 'error', 'reason', 'description', 'info', 'text', 'cause'];
+    for (const key of preferredKeys) {
+      if (key in value) {
+        const result = normalizeErrorText(value[key], visited);
+        if (result) return result;
+      }
+    }
+
+    for (const key of Object.keys(value)) {
+      if (preferredKeys.includes(key)) continue;
+      const result = normalizeErrorText(value[key], visited);
+      if (result) return result;
+    }
+  }
+
+  return null;
+}
+
 async function publishManifest(payload){
   const endpoints = ['/api/save_manifest', '/save_manifest.php'];
+  const DEFAULT_FALLBACK_PATH = '/tmp/manifest.json';
   let lastError = null;
+
+  const normalizePath = (value) => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('file://')) {
+      try {
+        const fileUrl = new URL(trimmed);
+        return fileUrl.pathname || null;
+      } catch (err) {
+        return trimmed.slice('file://'.length) || null;
+      }
+    }
+    return trimmed;
+  };
+
+  const extractErrorMessage = (data) => {
+    if (!data || typeof data !== 'object') return null;
+
+    const primaryFields = ['error', 'message', 'detail', 'description', 'reason'];
+    for (const field of primaryFields) {
+      if (field in data) {
+        const msg = normalizeErrorText(data[field]);
+        if (msg) return msg;
+      }
+    }
+
+    const collectionFields = ['errors', 'messages', 'details'];
+    for (const field of collectionFields) {
+      if (Array.isArray(data[field])) {
+        for (const entry of data[field]) {
+          const msg = normalizeErrorText(entry);
+          if (msg) return msg;
+        }
+      }
+    }
+
+    return normalizeErrorText(data);
+  };
+
+  const isDefaultFallback = (value) => normalizePath(value) === DEFAULT_FALLBACK_PATH;
 
   for (const url of endpoints) {
     try {
@@ -243,17 +328,38 @@ async function publishManifest(payload){
         body: JSON.stringify(payload),
       });
       const data = await response.json().catch(() => ({}));
+      const apiErrorMessage = extractErrorMessage(data);
       if (!response.ok) {
-        lastError = new Error(data.error || `HTTP ${response.status}`);
+        const message = apiErrorMessage || `HTTP ${response.status}`;
+        lastError = new Error(message);
         continue;
       }
+
+      const fallbackInfo = data && typeof data === 'object' ? data.fallback : null;
+      const failureDetected = [
+        data && typeof data === 'object' ? data.location : null,
+        fallbackInfo && typeof fallbackInfo.path === 'string' ? fallbackInfo.path : null,
+        fallbackInfo && typeof fallbackInfo.location === 'string' ? fallbackInfo.location : null,
+      ].some(isDefaultFallback);
+
+      if (failureDetected) {
+        const fallbackMessage = apiErrorMessage || `Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`;
+        lastError = new Error(fallbackMessage);
+        continue;
+      }
+
       return data;
     } catch (err) {
-      lastError = err;
+      const message = (err && err.message) ? err.message : null;
+      lastError = new Error(message || `Gagal publish melalui ${url}`);
     }
   }
 
   throw lastError || new Error('Gagal publish');
+}
+
+if (typeof window !== 'undefined') {
+  window.__control = Object.assign(window.__control || {}, { publishManifest });
 }
 
 // Publish
@@ -269,7 +375,14 @@ btnPublish.onclick = async () => {
     toast.show();
     notifyDisplay(manifest);
   } catch (err) {
-    alert('Gagal publish: ' + (err?.message || err));
+    const fallbackMsg = 'Tidak ada backend yang dapat menyimpan manifest secara permanen.';
+    const detail = normalizeErrorText(err && err.message)
+      || (err && typeof err === 'object' ? normalizeErrorText(err) : null)
+      || fallbackMsg;
+    const trimmed = detail.trim();
+    const needsFallback = !trimmed.includes(fallbackMsg);
+    const suffix = needsFallback ? `${trimmed.endsWith('.') ? '' : '.'} ${fallbackMsg}` : '';
+    alert('Gagal publish: ' + trimmed + suffix);
   }
 };
 
