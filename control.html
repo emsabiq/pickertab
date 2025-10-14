@@ -138,6 +138,8 @@ const tabBody = document.getElementById('tabBody');
 const countEl = document.getElementById('count');
 const toast = new bootstrap.Toast(document.getElementById('toast'));
 const toastBody = document.getElementById('toastBody');
+const STORAGE_KEY = 'picker-tabs:last-update';
+const broadcast = 'BroadcastChannel' in window ? new BroadcastChannel('picker-tabs') : null;
 
 function uid(){ return Math.random().toString(36).slice(2); }
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
@@ -229,18 +231,64 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+async function publishManifest(payload){
+  const endpoints = ['/api/save_manifest', '/save_manifest.php'];
+  let lastError = null;
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        lastError = new Error(data.error || `HTTP ${response.status}`);
+        continue;
+      }
+      return data;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Gagal publish');
+}
+
 // Publish
 btnPublish.onclick = async () => {
   const pin = document.getElementById('pin').value;
   if(!pin){ alert('Masukkan PIN'); return; }
   const payload = { ...manifest, pin };
-  const r = await fetch('/api/save_manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) { alert('Gagal publish: ' + (j.error||r.status)); return; }
-  manifest = j.manifest || manifest;
-  toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
-  toast.show();
+  try {
+    const result = await publishManifest(payload);
+    manifest = result.manifest || manifest;
+    renderList();
+    toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
+    toast.show();
+    notifyDisplay(manifest);
+  } catch (err) {
+    alert('Gagal publish: ' + (err?.message || err));
+  }
 };
+
+function notifyDisplay(nextManifest){
+  const now = Date.now();
+  const info = {
+    type: 'manifest-updated',
+    rev: nextManifest?.rev ?? null,
+    updatedAt: nextManifest?.updatedAt ?? new Date(now).toISOString(),
+    ts: now,
+  };
+  if (broadcast) {
+    try { broadcast.postMessage(info); } catch (err) {}
+  }
+  try {
+    const nonce = Math.random().toString(36).slice(2);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...info, nonce }));
+  } catch (err) {}
+}
 
 // ===== Local Picker (/assets) =====
 const pickerModal = new bootstrap.Modal(document.getElementById('pickerModal'));
