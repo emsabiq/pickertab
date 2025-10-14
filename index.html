@@ -7,6 +7,15 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
   <link href="style.css" rel="stylesheet">
+  <style>
+    /* fallback ringan kalau style.css belum mengatur viewer */
+    .viewer { min-height: 70vh; background:#fff; border:1px solid #e5e7eb; border-radius:.5rem; overflow:hidden }
+    .viewer iframe, .viewer img { width:100%; height:70vh; border:0; object-fit:contain }
+    @media (max-width: 576px){
+      .viewer { min-height: 65vh }
+      .viewer iframe, .viewer img { height:65vh }
+    }
+  </style>
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top">
@@ -33,14 +42,18 @@
 </main>
 
 <script>
+/* ----------------- STATE ----------------- */
 let state = { rev: 0, activeIndex: 0, tabs: [], updatedAt: '' };
 const STORAGE_KEY = 'picker-tabs:last-update';
 const broadcast = 'BroadcastChannel' in window ? new BroadcastChannel('picker-tabs') : null;
 let lastSignalTs = 0;
+
+/* SSE (EventSource) + backoff */
 let eventSource = null;
 let eventSourceRetryDelay = 2000;
 let eventSourceTimer = null;
 
+/* ----------------- DATA FETCH ----------------- */
 async function fetchManifestData() {
   const ts = Date.now();
   const sources = [`manifest.json?ts=${ts}`, `/api/manifest?ts=${ts}`];
@@ -84,13 +97,15 @@ async function fetchManifestData() {
         }
       }
     } catch (err) {
-      // ignore and try the next source
+      // lanjut ke source berikutnya
+      // console.debug('fetchManifestData error', url, err);
     }
   }
 
   return best;
 }
 
+/* ----------------- UI HELPERS ----------------- */
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
 function isLocal(url){
   // anggap lokal jika mengarah ke folder assets di domain ini
@@ -123,16 +138,19 @@ function renderViewer(){
     const img = document.createElement('img');
     img.src = local ? item.url : ('/api/proxy?url=' + encodeURIComponent(item.url));
     img.alt = item.title;
+    img.loading = 'lazy';
     viewer.appendChild(img);
   } else if (item.type === 'link') {
     const ifr = document.createElement('iframe');
     ifr.src = item.url; // link langsung
     ifr.title = item.title;
+    ifr.loading = 'lazy';
     viewer.appendChild(ifr);
   } else { // pdf
     const ifr = document.createElement('iframe');
     ifr.src = local ? item.url : ('/api/proxy?url=' + encodeURIComponent(item.url));
     ifr.title = item.title;
+    ifr.loading = 'lazy';
     viewer.appendChild(ifr);
   }
 }
@@ -160,24 +178,18 @@ function normalizeUpdatedAt(value){
     const ts = new Date(value);
     return Number.isNaN(ts.getTime()) ? '' : ts.toISOString();
   }
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value) {
-    return String(value);
-  }
-  return '';
+  if (typeof value === 'string') return value;
+  return value ? String(value) : '';
 }
 
 function renderMeta(){
   const m = document.getElementById('meta');
-  m.textContent = `Rev: ${state.rev} · Updated: ${state.updatedAt? state.updatedAt.replace('T',' ').replace('Z',''):''}`;
+  const upd = state.updatedAt ? state.updatedAt.replace('T',' ').replace('Z','') : '';
+  m.textContent = `Rev: ${state.rev} · Updated: ${upd}`;
 }
 
 function parseRevision(value){
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
-  }
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value === 'string' || typeof value === 'boolean') {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -189,21 +201,22 @@ function parseRevision(value){
 function revisionsEqual(a, b){
   const aNum = parseRevision(a);
   const bNum = parseRevision(b);
-  if (aNum !== null && bNum !== null) {
-    return aNum === bNum;
-  }
+  if (aNum !== null && bNum !== null) return aNum === bNum;
   return `${a ?? ''}` === `${b ?? ''}`;
 }
 
+/* ----------------- LOAD + SIGNAL ----------------- */
 async function load(){
   try {
     const data = await fetchManifestData();
     if (!data) return;
+
     const currentRev = state?.rev;
     const incomingRev = data?.rev;
     const currentUpdatedAt = state?.updatedAt ?? '';
     const incomingUpdatedAt = data?.updatedAt ?? '';
     const updatedChanged = `${currentUpdatedAt}` !== `${incomingUpdatedAt}`;
+
     const shouldRefresh =
       !Array.isArray(state.tabs) || !state.tabs.length ||
       !revisionsEqual(currentRev, incomingRev) ||
@@ -220,16 +233,43 @@ async function load(){
       renderViewer();
     }
     renderMeta();
-  } catch (e) {}
+  } catch (e) {
+    // console.warn('load() failed', e);
+  }
 }
 
-// init
-renderTabs(); renderViewer(); renderMeta();
-load();
-setInterval(load, 2000);
+/* terima sinyal dari berbagai jalur (SSE/Broadcast/storage) */
+function handleSignal(detail){
+  const candidates = [];
+  if (detail && typeof detail.ts === 'number') candidates.push(detail.ts);
+  if (detail && typeof detail.mtime === 'number') candidates.push(detail.mtime);
+  if (detail && typeof detail.sentAt === 'number') candidates.push(detail.sentAt);
+  const ts = candidates.find((v) => Number.isFinite(v)) ?? Date.now();
 
-document.getElementById('btnRefresh').onclick = load;
+  if (ts <= lastSignalTs) return;
+  lastSignalTs = ts;
+  load();
+}
 
+/* ----------------- BROADCAST + STORAGE ----------------- */
+if (broadcast) {
+  broadcast.addEventListener('message', (event) => {
+    if (!event?.data || event.data.type !== 'manifest-updated') return;
+    handleSignal(event.data);
+  });
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try {
+    const payload = JSON.parse(event.newValue);
+    if (payload && payload.type === 'manifest-updated') {
+      handleSignal(payload);
+    }
+  } catch (err) {}
+});
+
+/* ----------------- SSE (EventSource) ----------------- */
 function scheduleManifestStreamReconnect(){
   if (!('EventSource' in window)) return;
   if (eventSourceTimer) return;
@@ -254,7 +294,7 @@ function startManifestStream(){
 
   const es = new EventSource('/api/manifest_events');
   es.onopen = () => {
-    eventSourceRetryDelay = 2000;
+    eventSourceRetryDelay = 2000; // reset backoff saat sukses
   };
   es.onmessage = (event) => {
     if (!event.data) return;
@@ -264,7 +304,7 @@ function startManifestStream(){
         handleSignal(payload);
       }
     } catch (err) {
-      // ignore malformed payloads
+      // abaikan payload yang tidak valid
     }
   };
   es.onerror = () => {
@@ -277,34 +317,17 @@ function startManifestStream(){
   eventSource = es;
 }
 
-function handleSignal(detail){
-  const candidates = [];
-  if (detail && typeof detail.ts === 'number') candidates.push(detail.ts);
-  if (detail && typeof detail.mtime === 'number') candidates.push(detail.mtime);
-  if (detail && typeof detail.sentAt === 'number') candidates.push(detail.sentAt);
-  const ts = candidates.find((value) => Number.isFinite(value)) ?? Date.now();
-  if (ts <= lastSignalTs) return;
-  lastSignalTs = ts;
-  load();
-}
+/* ----------------- INIT ----------------- */
+renderTabs(); renderViewer(); renderMeta();
+load();
 
-if (broadcast) {
-  broadcast.addEventListener('message', (event) => {
-    if (!event?.data || event.data.type !== 'manifest-updated') return;
-    handleSignal(event.data);
-  });
-}
+/* Polling sebagai baseline; SSE & sinyal akan membuatnya lebih responsif */
+const POLL_MS = 2000;
+setInterval(load, POLL_MS);
 
-window.addEventListener('storage', (event) => {
-  if (event.key !== STORAGE_KEY || !event.newValue) return;
-  try {
-    const payload = JSON.parse(event.newValue);
-    if (payload && payload.type === 'manifest-updated') {
-      handleSignal(payload);
-    }
-  } catch (err) {}
-});
+document.getElementById('btnRefresh').onclick = load;
 
+/* Aktifkan SSE bila tersedia */
 if ('EventSource' in window) {
   startManifestStream();
 }
