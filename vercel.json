@@ -7,13 +7,15 @@
     { "src": "manifest.json", "use": "@vercel/static" },
     { "src": "assets/**/*", "use": "@vercel/static" },
     { "src": "public/**/*", "use": "@vercel/static" },
-    { "src": "api/*.js", "use": "@vercel/node" }
+    { "src": "api/*.js", "use": "@vercel/node" },
+    { "src": "save_manifest.php", "use": "@vercel/php" }
   ],
   "routes": [
     { "src": "/", "dest": "/index.html" },
     { "src": "/control", "dest": "/control.html" },
     { "src": "/control.html", "dest": "/control.html" },
     { "src": "/manifest.json", "dest": "/manifest.json" },
+    { "src": "/save_manifest.php", "dest": "/save_manifest.php" },
     { "src": "/api/(.*)", "dest": "/api/$1.js" }
   ]
 }

@@ -6,7 +6,9 @@ Aplikasi ringan untuk mengelola daftar tab/panel (PDF, gambar, atau tautan) yang
 
 Repositori ini menyertakan implementasi backend berbasis PHP (`save_manifest.php`, `proxy.php`) dan API Node.js
 pada folder `api/`. Keduanya menulis ke berkas `manifest.json` yang sama sehingga Anda dapat memilih runtime yang
-paling nyaman.
+paling nyaman. Saat melakukan deploy ke Vercel, pastikan `save_manifest.php` dibangun dengan runtime
+`@vercel/php` (lihat konfigurasi pada `vercel.json`) agar fallback backend PHP tetap tersedia meskipun fungsi Node.js
+tidak dapat dijalankan.
 
 ## Variabel Lingkungan untuk Node.js
 
