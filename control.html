@@ -291,7 +291,51 @@ function normalizeErrorText(value, visited = new Set()) {
 async function publishManifest(payload){
   const endpoints = ['/api/save_manifest', '/save_manifest.php'];
   const DEFAULT_FALLBACK_PATH = '/tmp/manifest.json';
+  const failures = [];
   let lastError = null;
+
+  const scrubMessage = (value) => {
+    if (typeof value !== 'string') return null;
+    let text = value.trim();
+    if (!text) return null;
+    if (/\[object\s+Object]/i.test(text)) {
+      text = text.replace(/\[object\s+Object]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+    if (!text) return null;
+    if (/^(true|false|null|undefined)$/i.test(text)) return null;
+    return text;
+  };
+
+  const recordFailure = (url, reason) => {
+    let message = null;
+    const normalized = normalizeErrorText(reason);
+    if (typeof normalized === 'string') {
+      message = scrubMessage(normalized);
+    } else if (typeof normalized === 'number' || typeof normalized === 'boolean' || typeof normalized === 'bigint') {
+      message = scrubMessage(String(normalized));
+    }
+
+    if (!message && typeof reason === 'string') {
+      message = scrubMessage(reason);
+    }
+    if (!message && (typeof reason === 'number' || typeof reason === 'boolean' || typeof reason === 'bigint')) {
+      message = scrubMessage(String(reason));
+    }
+
+    if (!message && reason && typeof reason === 'object') {
+      try {
+        const json = JSON.stringify(reason);
+        message = scrubMessage(json);
+      } catch (err) {}
+    }
+
+    if (!message) {
+      message = `Gagal publish melalui ${url}`;
+    }
+
+    failures.push({ url, message });
+    lastError = new Error(message);
+  };
 
   const normalizePath = (value) => {
     if (typeof value !== 'string') return null;
@@ -344,8 +388,8 @@ async function publishManifest(payload){
       const data = await response.json().catch(() => ({}));
       const apiErrorMessage = extractErrorMessage(data);
       if (!response.ok) {
-        const message = apiErrorMessage || `HTTP ${response.status}`;
-        lastError = new Error(message);
+        const message = scrubMessage(apiErrorMessage ?? '') || `HTTP ${response.status}`;
+        recordFailure(url, message);
         continue;
       }
 
@@ -357,16 +401,30 @@ async function publishManifest(payload){
       ].some(isDefaultFallback);
 
       if (failureDetected) {
-        const fallbackMessage = apiErrorMessage || `Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`;
-        lastError = new Error(fallbackMessage);
+        const fallbackMessage = scrubMessage(apiErrorMessage ?? '')
+          || `Backend ${url} hanya dapat menyimpan manifest ke lokasi sementara (${DEFAULT_FALLBACK_PATH}).`;
+        recordFailure(url, fallbackMessage);
         continue;
       }
 
       return data;
     } catch (err) {
-      const message = (err && err.message) ? err.message : null;
-      lastError = new Error(message || `Gagal publish melalui ${url}`);
+      const rawDetail = normalizeErrorText(err && err.message)
+        || normalizeErrorText(err)
+        || (err && err.message)
+        || `Gagal publish melalui ${url}`;
+      const message = scrubMessage(typeof rawDetail === 'string' ? rawDetail : '')
+        || (typeof rawDetail === 'string' ? rawDetail.trim() : '')
+        || `Gagal publish melalui ${url}`;
+      recordFailure(url, message);
     }
+  }
+
+  if (failures.length) {
+    const detail = failures
+      .map(({ url, message }) => `${url}: ${message}`)
+      .join(' | ');
+    throw new Error(detail);
   }
 
   throw lastError || new Error('Gagal publish');

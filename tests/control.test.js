@@ -445,7 +445,7 @@ test('publish click handler surfaces backend error messages nested in objects', 
   assert.equal(alerts.length, 1, 'should surface a single alert for the failure');
   assert.equal(
     alerts[0],
-    'Gagal publish: Backend sekunder offline. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'Gagal publish: /api/save_manifest: Backend primer down | /save_manifest.php: Backend sekunder offline. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
     'alert message should include backend-provided error text'
   );
 });
@@ -502,7 +502,7 @@ test('publish click handler flattens complex object error payloads', async () =>
   assert.equal(alerts.length, 1, 'should surface a single alert');
   assert.equal(
     alerts[0],
-    'Gagal publish: Permission denied menulis manifest. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'Gagal publish: /api/save_manifest: Disk read-only | /save_manifest.php: Permission denied menulis manifest. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
     'alert should flatten nested object messages into readable text'
   );
 });
@@ -563,7 +563,7 @@ test('publish click handler strips [object Object] placeholders from error strin
   assert.equal(alerts.length, 1, 'should surface a single alert');
   assert.equal(
     alerts[0],
-    'Gagal publish: HTTP 500. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'Gagal publish: /api/save_manifest: Backend /api/save_manifest hanya dapat menyimpan manifest ke lokasi sementara (/tmp/manifest.json). | /save_manifest.php: HTTP 500. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
     'alert should fall back to HTTP status when error payload only provides [object Object]'
   );
   assert.ok(!alerts[0].includes('[object Object]'), 'alert must not surface raw [object Object] placeholders');
@@ -600,7 +600,7 @@ test('publish click handler replaces thrown [object Object] errors with fallback
   assert.equal(alerts.length, 1, 'should surface a single alert');
   assert.equal(
     alerts[0],
-    'Gagal publish: Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'Gagal publish: /api/save_manifest: Gagal publish melalui /api/save_manifest | /save_manifest.php: Gagal publish melalui /save_manifest.php. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
     'alert should fall back entirely when thrown errors only contain [object Object]'
   );
 });
