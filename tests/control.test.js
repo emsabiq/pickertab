@@ -506,3 +506,65 @@ test('publish click handler flattens complex object error payloads', async () =>
     'alert should flatten nested object messages into readable text'
   );
 });
+
+test('publish click handler strips [object Object] placeholders from error strings', async () => {
+  const alerts = [];
+  const context = createControlContext({
+    alert: (msg) => {
+      alerts.push(msg);
+    },
+  });
+  vm.runInNewContext(inlineScript, context);
+
+  context.document.getElementById('pin').value = '7777';
+
+  const responses = [
+    {
+      ok: true,
+      status: 200,
+      body: {
+        ok: true,
+        fallback: { type: 'alternate', path: '/tmp/manifest.json' },
+        error: 'Error: [object Object]',
+      },
+    },
+    {
+      ok: false,
+      status: 500,
+      body: { message: 'Error: [object Object]' },
+    },
+  ];
+
+  let call = 0;
+  context.fetch = async (url, opts = {}) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+
+    if (opts && opts.method === 'POST') {
+      const res = responses[call];
+      call += 1;
+      if (!res) {
+        throw new Error(`Unexpected publish call for ${url}`);
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        json: async () => res.body,
+      };
+    }
+
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  await context.btnPublish.onclick();
+
+  assert.equal(call, 2, 'should attempt both backends');
+  assert.equal(alerts.length, 1, 'should surface a single alert');
+  assert.equal(
+    alerts[0],
+    'Gagal publish: HTTP 500. Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'alert should fall back to HTTP status when error payload only provides [object Object]'
+  );
+  assert.ok(!alerts[0].includes('[object Object]'), 'alert must not surface raw [object Object] placeholders');
+});
