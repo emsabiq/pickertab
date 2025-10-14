@@ -39,7 +39,8 @@ async function fetchManifestData() {
   const ts = Date.now();
   const sources = [`manifest.json?ts=${ts}`, `/api/manifest?ts=${ts}`];
   let best = null;
-  let bestRev = -Infinity;
+  let bestRevNum = null;
+  let bestRevRaw;
   let bestUpdated = -Infinity;
 
   for (const url of sources) {
@@ -48,15 +49,31 @@ async function fetchManifestData() {
       if (!res.ok) continue;
       const data = await res.json();
       if (data && typeof data === 'object' && Array.isArray(data.tabs)) {
-        const rev = Number(data.rev) || 0;
-        const updatedAt = Date.parse(data.updatedAt || '') || 0;
-        if (
-          !best ||
-          rev > bestRev ||
-          (rev === bestRev && updatedAt > bestUpdated)
-        ) {
+        const revRaw = data.rev;
+        const revNum = parseRevision(revRaw);
+        const updatedAt = parseUpdatedAt(data.updatedAt);
+        let shouldUse = false;
+
+        if (!best) {
+          shouldUse = true;
+        } else if (revNum !== null && bestRevNum !== null) {
+          if (revNum > bestRevNum) {
+            shouldUse = true;
+          } else if (revNum === bestRevNum && updatedAt > bestUpdated) {
+            shouldUse = true;
+          }
+        } else {
+          if (!revisionsEqual(bestRevRaw, revRaw)) {
+            shouldUse = true;
+          } else if (updatedAt > bestUpdated) {
+            shouldUse = true;
+          }
+        }
+
+        if (shouldUse) {
           best = data;
-          bestRev = rev;
+          bestRevNum = revNum;
+          bestRevRaw = revRaw;
           bestUpdated = updatedAt;
         }
       }
