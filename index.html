@@ -37,6 +37,9 @@ let state = { rev: 0, activeIndex: 0, tabs: [], updatedAt: '' };
 const STORAGE_KEY = 'picker-tabs:last-update';
 const broadcast = 'BroadcastChannel' in window ? new BroadcastChannel('picker-tabs') : null;
 let lastSignalTs = 0;
+let eventSource = null;
+let eventSourceRetryDelay = 2000;
+let eventSourceTimer = null;
 
 async function fetchManifestData() {
   const ts = Date.now();
@@ -227,8 +230,59 @@ setInterval(load, 2000);
 
 document.getElementById('btnRefresh').onclick = load;
 
+function scheduleManifestStreamReconnect(){
+  if (!('EventSource' in window)) return;
+  if (eventSourceTimer) return;
+  const delay = eventSourceRetryDelay;
+  eventSourceTimer = setTimeout(() => {
+    eventSourceTimer = null;
+    startManifestStream();
+  }, delay);
+  eventSourceRetryDelay = Math.min(eventSourceRetryDelay * 2, 30000);
+}
+
+function startManifestStream(){
+  if (!('EventSource' in window)) return;
+  if (eventSourceTimer) {
+    clearTimeout(eventSourceTimer);
+    eventSourceTimer = null;
+  }
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+
+  const es = new EventSource('/api/manifest_events');
+  es.onopen = () => {
+    eventSourceRetryDelay = 2000;
+  };
+  es.onmessage = (event) => {
+    if (!event.data) return;
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload && payload.type === 'manifest-updated') {
+        handleSignal(payload);
+      }
+    } catch (err) {
+      // ignore malformed payloads
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    if (eventSource === es) {
+      eventSource = null;
+    }
+    scheduleManifestStreamReconnect();
+  };
+  eventSource = es;
+}
+
 function handleSignal(detail){
-  const ts = typeof detail?.ts === 'number' ? detail.ts : Date.now();
+  const candidates = [];
+  if (detail && typeof detail.ts === 'number') candidates.push(detail.ts);
+  if (detail && typeof detail.mtime === 'number') candidates.push(detail.mtime);
+  if (detail && typeof detail.sentAt === 'number') candidates.push(detail.sentAt);
+  const ts = candidates.find((value) => Number.isFinite(value)) ?? Date.now();
   if (ts <= lastSignalTs) return;
   lastSignalTs = ts;
   load();
@@ -250,6 +304,10 @@ window.addEventListener('storage', (event) => {
     }
   } catch (err) {}
 });
+
+if ('EventSource' in window) {
+  startManifestStream();
+}
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
