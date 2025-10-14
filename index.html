@@ -34,6 +34,9 @@
 
 <script>
 let state = { rev: 0, activeIndex: 0, tabs: [], updatedAt: '' };
+const STORAGE_KEY = 'picker-tabs:last-update';
+const broadcast = 'BroadcastChannel' in window ? new BroadcastChannel('picker-tabs') : null;
+let lastSignalTs = 0;
 
 async function fetchManifestData() {
   const ts = Date.now();
@@ -223,6 +226,30 @@ load();
 setInterval(load, 2000);
 
 document.getElementById('btnRefresh').onclick = load;
+
+function handleSignal(detail){
+  const ts = typeof detail?.ts === 'number' ? detail.ts : Date.now();
+  if (ts <= lastSignalTs) return;
+  lastSignalTs = ts;
+  load();
+}
+
+if (broadcast) {
+  broadcast.addEventListener('message', (event) => {
+    if (!event?.data || event.data.type !== 'manifest-updated') return;
+    handleSignal(event.data);
+  });
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try {
+    const payload = JSON.parse(event.newValue);
+    if (payload && payload.type === 'manifest-updated') {
+      handleSignal(payload);
+    }
+  } catch (err) {}
+});
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>

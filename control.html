@@ -138,6 +138,8 @@ const tabBody = document.getElementById('tabBody');
 const countEl = document.getElementById('count');
 const toast = new bootstrap.Toast(document.getElementById('toast'));
 const toastBody = document.getElementById('toastBody');
+const STORAGE_KEY = 'picker-tabs:last-update';
+const broadcast = 'BroadcastChannel' in window ? new BroadcastChannel('picker-tabs') : null;
 
 function uid(){ return Math.random().toString(36).slice(2); }
 function iconByType(t){ return t==='pdf'?'bi-filetype-pdf':t==='image'?'bi-image':'bi-link-45deg'; }
@@ -262,12 +264,31 @@ btnPublish.onclick = async () => {
   try {
     const result = await publishManifest(payload);
     manifest = result.manifest || manifest;
+    renderList();
     toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
     toast.show();
+    notifyDisplay(manifest);
   } catch (err) {
     alert('Gagal publish: ' + (err?.message || err));
   }
 };
+
+function notifyDisplay(nextManifest){
+  const now = Date.now();
+  const info = {
+    type: 'manifest-updated',
+    rev: nextManifest?.rev ?? null,
+    updatedAt: nextManifest?.updatedAt ?? new Date(now).toISOString(),
+    ts: now,
+  };
+  if (broadcast) {
+    try { broadcast.postMessage(info); } catch (err) {}
+  }
+  try {
+    const nonce = Math.random().toString(36).slice(2);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...info, nonce }));
+  } catch (err) {}
+}
 
 // ===== Local Picker (/assets) =====
 const pickerModal = new bootstrap.Modal(document.getElementById('pickerModal'));
