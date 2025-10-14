@@ -568,3 +568,39 @@ test('publish click handler strips [object Object] placeholders from error strin
   );
   assert.ok(!alerts[0].includes('[object Object]'), 'alert must not surface raw [object Object] placeholders');
 });
+
+test('publish click handler replaces thrown [object Object] errors with fallback messaging', async () => {
+  const alerts = [];
+  const context = createControlContext({
+    alert: (msg) => {
+      alerts.push(msg);
+    },
+  });
+  vm.runInNewContext(inlineScript, context);
+
+  context.document.getElementById('pin').value = '1357';
+
+  let call = 0;
+  context.fetch = async (url, opts = {}) => {
+    if (typeof url === 'string' && (url.includes('manifest.json') || url.includes('/api/manifest'))) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+
+    if (opts && opts.method === 'POST') {
+      call += 1;
+      throw new Error('[object Object]');
+    }
+
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  await context.btnPublish.onclick();
+
+  assert.equal(call, 2, 'should attempt both backends');
+  assert.equal(alerts.length, 1, 'should surface a single alert');
+  assert.equal(
+    alerts[0],
+    'Gagal publish: Tidak ada backend yang dapat menyimpan manifest secara permanen.',
+    'alert should fall back entirely when thrown errors only contain [object Object]'
+  );
+});

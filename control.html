@@ -390,10 +390,23 @@ btnPublish.onclick = async () => {
     notifyDisplay(manifest);
   } catch (err) {
     const fallbackMsg = 'Tidak ada backend yang dapat menyimpan manifest secara permanen.';
-    const detail = normalizeErrorText(err && err.message)
+    const rawDetail = normalizeErrorText(err && err.message)
       || (err && typeof err === 'object' ? normalizeErrorText(err) : null)
       || fallbackMsg;
-    const trimmed = detail.trim();
+
+    let trimmed = rawDetail ? rawDetail.trim() : '';
+    if (!trimmed) {
+      trimmed = fallbackMsg;
+    }
+
+    if (/\[object\s+Object]/i.test(trimmed)) {
+      trimmed = trimmed.replace(/\[object\s+Object]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    if (!trimmed || /\[object\s+Object]/i.test(trimmed)) {
+      trimmed = fallbackMsg;
+    }
+
     const needsFallback = !trimmed.includes(fallbackMsg);
     const suffix = needsFallback ? `${trimmed.endsWith('.') ? '' : '.'} ${fallbackMsg}` : '';
     alert('Gagal publish: ' + trimmed + suffix);
