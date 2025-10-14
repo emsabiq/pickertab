@@ -231,6 +231,63 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+function normalizeErrorText(value, visited = new Set()) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    let trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const parsedMessage = normalizeErrorText(parsed, visited);
+        if (parsedMessage) return parsedMessage;
+      } catch (err) {}
+    }
+
+    if (/\[object Object\]/i.test(trimmed)) {
+      trimmed = trimmed.replace(/\[object Object\]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    if (!trimmed || trimmed === '[object Object]' || /^Error:?$/i.test(trimmed)) return null;
+    return trimmed;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  if (value instanceof Error) {
+    return normalizeErrorText(value.message, visited);
+  }
+  if (typeof value === 'object') {
+    if (visited.has(value)) return null;
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const result = normalizeErrorText(entry, visited);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    const preferredKeys = ['message', 'detail', 'error', 'reason', 'description', 'info', 'text', 'cause'];
+    for (const key of preferredKeys) {
+      if (key in value) {
+        const result = normalizeErrorText(value[key], visited);
+        if (result) return result;
+      }
+    }
+
+    for (const key of Object.keys(value)) {
+      if (preferredKeys.includes(key)) continue;
+      const result = normalizeErrorText(value[key], visited);
+      if (result) return result;
+    }
+  }
+
+  return null;
+}
+
 async function publishManifest(payload){
   const endpoints = ['/api/save_manifest', '/save_manifest.php'];
   const DEFAULT_FALLBACK_PATH = '/tmp/manifest.json';
@@ -254,30 +311,25 @@ async function publishManifest(payload){
   const extractErrorMessage = (data) => {
     if (!data || typeof data !== 'object') return null;
 
-    const pickMessage = (value) => {
-      if (!value) return null;
-      if (typeof value === 'string') {
-        const msg = value.trim();
-        return msg || null;
-      }
-      if (typeof value === 'object') {
-        const nested = pickMessage(value.message || value.detail || value.error);
-        if (nested) return nested;
-      }
-      return null;
-    };
-
-    const direct = pickMessage(data.error) || pickMessage(data.message);
-    if (direct) return direct;
-
-    if (Array.isArray(data.errors)) {
-      for (const entry of data.errors) {
-        const msg = pickMessage(entry);
+    const primaryFields = ['error', 'message', 'detail', 'description', 'reason'];
+    for (const field of primaryFields) {
+      if (field in data) {
+        const msg = normalizeErrorText(data[field]);
         if (msg) return msg;
       }
     }
 
-    return null;
+    const collectionFields = ['errors', 'messages', 'details'];
+    for (const field of collectionFields) {
+      if (Array.isArray(data[field])) {
+        for (const entry of data[field]) {
+          const msg = normalizeErrorText(entry);
+          if (msg) return msg;
+        }
+      }
+    }
+
+    return normalizeErrorText(data);
   };
 
   const isDefaultFallback = (value) => normalizePath(value) === DEFAULT_FALLBACK_PATH;
@@ -292,7 +344,8 @@ async function publishManifest(payload){
       const data = await response.json().catch(() => ({}));
       const apiErrorMessage = extractErrorMessage(data);
       if (!response.ok) {
-        lastError = new Error(apiErrorMessage || `HTTP ${response.status}`);
+        const message = apiErrorMessage || `HTTP ${response.status}`;
+        lastError = new Error(message);
         continue;
       }
 
@@ -337,9 +390,13 @@ btnPublish.onclick = async () => {
     notifyDisplay(manifest);
   } catch (err) {
     const fallbackMsg = 'Tidak ada backend yang dapat menyimpan manifest secara permanen.';
-    const message = (err && err.message) ? err.message : fallbackMsg;
-    const extra = message.includes(fallbackMsg) ? '' : ` ${fallbackMsg}`;
-    alert('Gagal publish: ' + message + (extra ? '.' + extra : ''));
+    const detail = normalizeErrorText(err && err.message)
+      || (err && typeof err === 'object' ? normalizeErrorText(err) : null)
+      || fallbackMsg;
+    const trimmed = detail.trim();
+    const needsFallback = !trimmed.includes(fallbackMsg);
+    const suffix = needsFallback ? `${trimmed.endsWith('.') ? '' : '.'} ${fallbackMsg}` : '';
+    alert('Gagal publish: ' + trimmed + suffix);
   }
 };
 
