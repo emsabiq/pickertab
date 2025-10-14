@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="id" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <title>Monitor — Picker Tabs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap 5 & Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+
+  <!-- Firebase compat -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <style>
+    .border-dashed { border-style: dashed !important; }
+    .viewer-min { min-height: 55vh; }
+    @media (max-width: 640px){ .viewer-min { min-height: 50vh; } }
+    .tab-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; display: inline-block; vertical-align: bottom; }
+  </style>
+</head>
+<body class="bg-body-tertiary">
+
+  <nav class="navbar navbar-expand-lg bg-body border-bottom sticky-top">
+    <div class="container">
+      <a class="navbar-brand fw-semibold" href="#">
+        <i class="bi bi-window-sidebar me-2"></i>Monitor — Picker Tabs
+      </a>
+      <div class="ms-auto small">
+        <span id="authBadge" class="badge text-bg-secondary">Auth: —</span>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container my-4">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <p class="text-body-secondary small mb-3" id="meta">Menunggu publish dari Control…</p>
+
+        <!-- Nav Tabs -->
+        <ul class="nav nav-tabs" id="tabsNav" role="tablist"></ul>
+
+        <!-- Tab Panes -->
+        <div class="tab-content border border-top-0 rounded-bottom p-3 bg-body-secondary-subtle" id="tabsContent">
+          <div class="text-center text-body-secondary fst-italic">Belum ada tab / konten dipublish.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-3 text-center text-body-secondary small">
+      <i class="bi bi-lightning-charge"></i> Real-time dari <strong>control.html</strong>. Pilih tab untuk melihat konten.
+    </div>
+  </main>
+
+  <script src="./config.js"></script>
+  <script>
+    // ---------- Firebase ----------
+    firebase.initializeApp(APP_CONFIG.firebase);
+    const authBadge = document.getElementById('authBadge');
+    firebase.auth().onAuthStateChanged((user)=>{
+      if(user){ authBadge.className='badge text-bg-success'; authBadge.textContent='Auth: signed-in ('+user.uid.slice(0,6)+'…)'; }
+      else { authBadge.className='badge text-bg-warning'; authBadge.textContent='Auth: signed-out'; }
+    });
+    firebase.auth().signInAnonymously().catch(console.error);
+
+    const meta  = document.getElementById('meta');
+    const tabsNav = document.getElementById('tabsNav');
+    const tabsContent = document.getElementById('tabsContent');
+
+    const refTabs = firebase.database().ref(APP_CONFIG.publishPath + '/tabs');
+    const refLegacy = firebase.database().ref(APP_CONFIG.publishPath); // fallback single
+
+    // ---------- helpers ----------
+    function extFromUrl(url){
+      try {
+        const name = new URL(url).pathname.split('/').pop().toLowerCase().split('?')[0];
+        const m = name.match(/\.([a-z0-9]+)$/i);
+        return m ? m[1] : '';
+      } catch { return ''; }
+    }
+    function kindFromExt(ext){
+      if(['png','jpg','jpeg','gif','webp','bmp','svg'].includes(ext)) return 'image';
+      if(['mp4','webm','ogg'].includes(ext)) return 'video';
+      if(['mp3','wav','m4a','oga','ogg'].includes(ext)) return 'audio';
+      if(ext === 'pdf') return 'pdf';
+      if(['doc','docx'].includes(ext)) return 'doc';
+      if(['xls','xlsx','csv'].includes(ext)) return ext === 'csv' ? 'csv' : 'sheet';
+      if(['ppt','pptx'].includes(ext)) return 'ppt';
+      if(['txt','md'].includes(ext)) return 'text';
+      if(['html','htm'].includes(ext)) return 'html';
+      if(['json'].includes(ext)) return 'json';
+      return 'other';
+    }
+    function iconForKind(kind){
+      const map = {
+        image:'bi-file-earmark-image', video:'bi-file-earmark-play', audio:'bi-file-earmark-music',
+        pdf:'bi-filetype-pdf', doc:'bi-filetype-doc', sheet:'bi-file-earmark-spreadsheet',
+        ppt:'bi-filetype-ppt', csv:'bi-filetype-csv', text:'bi-file-earmark-text',
+        html:'bi-filetype-html', json:'bi-filetype-json', other:'bi-file-earmark'
+      };
+      return map[kind] || map.other;
+    }
+    function badgeForKind(kind){
+      const labelMap = {image:'IMG', video:'VID', audio:'AUD', pdf:'PDF', doc:'DOC', sheet:'XLS', ppt:'PPT', csv:'CSV', text:'TXT', html:'HTML', json:'JSON', other:'FILE'};
+      const clsMap = {pdf:'text-bg-danger', image:'text-bg-primary', video:'text-bg-primary', audio:'text-bg-primary', sheet:'text-bg-success', csv:'text-bg-success', doc:'text-bg-secondary', ppt:'text-bg-warning', text:'text-bg-secondary', html:'text-bg-info', json:'text-bg-dark', other:'text-bg-secondary'};
+      return `<span class="badge ${clsMap[kind]||'text-bg-secondary'} me-2"><i class="bi ${iconForKind(kind)}"></i> ${labelMap[kind]||'FILE'}</span>`;
+    }
+    function wrapRatio(child, ratio='ratio-16x9'){
+      const wrap = document.createElement('div');
+      wrap.className = `ratio ${ratio} w-100`;
+      wrap.appendChild(child);
+      return wrap;
+    }
+    async function toBlobUrl(url, typeHint){
+      const r = await fetch(url, { mode: 'cors' });
+      if(!r.ok) throw new Error('Gagal fetch (HTTP '+r.status+')');
+      const b = await r.blob();
+      const typed = typeHint && b.type !== typeHint ? new Blob([b], { type: typeHint }) : b;
+      const obj = URL.createObjectURL(typed);
+      return { url: obj, revoke: () => URL.revokeObjectURL(obj) };
+    }
+    function gdocsViewer(rawUrl){
+      return `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(rawUrl)}`;
+    }
+
+    async function renderPreview(container, file){
+      container.innerHTML = '';
+      if(!file || !file.url){ container.innerHTML = '<div class="text-body-secondary fst-italic">Tidak ada konten.</div>'; return; }
+
+      const url = file.url, name = file.name || '';
+      const ext = extFromUrl(url);
+      const kind = kindFromExt(ext);
+
+      try{
+        if(kind === 'image'){
+          const img = new Image(); img.src = url; img.alt = name; img.className='img-fluid rounded';
+          container.appendChild(img); return;
+        }
+        if(kind === 'video'){
+          const v = document.createElement('video'); v.src = url; v.controls = true; v.playsInline = true; v.className='w-100 rounded';
+          container.appendChild(wrapRatio(v,'ratio-16x9')); return;
+        }
+        if(kind === 'audio'){
+          const a = document.createElement('audio'); a.src = url; a.controls = true; a.className='w-100';
+          container.appendChild(a); return;
+        }
+        if(kind === 'pdf'){
+          const { url: blobUrl, revoke } = await toBlobUrl(url, 'application/pdf');
+          const f = document.createElement('iframe'); f.src = blobUrl; f.className='w-100 border-0 rounded';
+          container.appendChild(wrapRatio(f,'ratio-4x3')); f.addEventListener('load',()=>setTimeout(revoke,60000)); return;
+        }
+        if(kind === 'doc' || kind === 'sheet' || kind === 'ppt' || kind === 'csv'){
+          const f = document.createElement('iframe'); f.src = gdocsViewer(url); f.className='w-100 border-0 rounded';
+          container.appendChild(wrapRatio(f,'ratio-4x3')); return;
+        }
+        if(kind === 'text'){
+          const r = await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+          const text = await r.text(); const pre = document.createElement('pre'); pre.className='p-3 bg-body-tertiary border rounded small'; pre.textContent=text;
+          container.appendChild(pre); return;
+        }
+        if(kind === 'html'){
+          const r = await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+          const html = await r.text(); const iframe = document.createElement('iframe'); iframe.className='w-100 border-0 rounded'; iframe.srcdoc = html;
+          container.appendChild(wrapRatio(iframe,'ratio-4x3')); return;
+        }
+        if(kind === 'json'){
+          const r = await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+          const json = await r.json(); const pre = document.createElement('pre'); pre.className='p-3 bg-body-tertiary border rounded small'; pre.textContent = JSON.stringify(json,null,2);
+          container.appendChild(pre); return;
+        }
+        // fallback
+        const a = document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener'; a.textContent=name || url;
+        container.appendChild(a);
+      }catch(e){
+        container.innerHTML = `<div class="text-danger">Preview gagal: ${e && e.message ? e.message : e}</div>`;
+      }
+    }
+
+    function buildTabs(dataObj){
+      tabsNav.innerHTML = '';
+      tabsContent.innerHTML = '';
+
+      const keys = Object.keys(dataObj||{}).sort((a,b)=> Number(a)-Number(b));
+      if(keys.length === 0){
+        tabsContent.innerHTML = '<div class="text-center text-body-secondary fst-italic">Belum ada tab / konten dipublish.</div>';
+        return;
+      }
+      keys.forEach((k, idx)=>{
+        const file = dataObj[k] || {};
+        const ext = extFromUrl(file.url||'');
+        const kind = kindFromExt(ext);
+        const active = idx===0 ? 'active' : '';
+        const selected = idx===0 ? 'true' : 'false';
+
+        // nav
+        const li = document.createElement('li'); li.className='nav-item'; li.role='presentation';
+        li.innerHTML = `
+          <button class="nav-link ${active}" id="tab-${k}-tab" data-bs-toggle="tab" data-bs-target="#tab-${k}" type="button" role="tab" aria-controls="tab-${k}" aria-selected="${selected}">
+            ${badgeForKind(kind)} <span class="tab-title" title="${file.name||'-'}">${file.name || 'Tab ' + k}</span>
+          </button>`;
+        tabsNav.appendChild(li);
+
+        // pane
+        const pane = document.createElement('div'); pane.className=`tab-pane fade ${active?'show active':''}`;
+        pane.id = `tab-${k}`; pane.role='tabpanel'; pane.ariaLabelledby=`tab-${k}-tab`;
+        pane.innerHTML = `
+          <div class="mb-2 small text-body-secondary">
+            <i class="bi ${iconForKind(kind)}"></i> ${file.name || '(tanpa nama)'}
+            ${file.ts ? ' • ' + new Date(file.ts).toLocaleString() : ''}
+            ${file.by ? ' • oleh ' + file.by : ''}
+          </div>
+          <div class="bg-body border border-dashed rounded p-2 viewer-min d-flex align-items-center justify-content-center">
+            <div class="w-100" id="viewer-${k}"></div>
+          </div>`;
+        tabsContent.appendChild(pane);
+
+        // render preview
+        setTimeout(()=> renderPreview(document.getElementById('viewer-'+k), file), 0);
+      });
+    }
+
+    // prefer tabs object; if not present, fallback to single payload
+    refTabs.on('value', (snap)=>{
+      const tabs = snap.val() || {};
+      buildTabs(tabs);
+      meta.textContent = Object.keys(tabs).length ? 'Pilih tab untuk melihat konten.' : 'Menunggu publish dari Control…';
+    });
+
+    // legacy fallback (single)
+    refLegacy.on('value', (snap)=>{
+      const d = snap.val()||{};
+      if(d && d.url && !d.tabs){ // legacy structure
+        buildTabs({ 1: d });
+        const timeStr = d.ts ? new Date(d.ts).toLocaleString() : '—';
+        meta.textContent = `Mode legacy • ${d.name||'(tanpa nama)'} • ${timeStr} oleh ${d.by||'control'}`;
+      }
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
