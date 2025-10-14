@@ -229,17 +229,44 @@ btnAdd.onclick = () => {
   renderList();
 };
 
+async function publishManifest(payload){
+  const endpoints = ['/api/save_manifest', '/save_manifest.php'];
+  let lastError = null;
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        lastError = new Error(data.error || `HTTP ${response.status}`);
+        continue;
+      }
+      return data;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Gagal publish');
+}
+
 // Publish
 btnPublish.onclick = async () => {
   const pin = document.getElementById('pin').value;
   if(!pin){ alert('Masukkan PIN'); return; }
   const payload = { ...manifest, pin };
-  const r = await fetch('/api/save_manifest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) { alert('Gagal publish: ' + (j.error||r.status)); return; }
-  manifest = j.manifest || manifest;
-  toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
-  toast.show();
+  try {
+    const result = await publishManifest(payload);
+    manifest = result.manifest || manifest;
+    toastBody.textContent = 'Manifest terpublikasi (rev ' + manifest.rev + ').';
+    toast.show();
+  } catch (err) {
+    alert('Gagal publish: ' + (err?.message || err));
+  }
 };
 
 // ===== Local Picker (/assets) =====
