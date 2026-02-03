@@ -11,6 +11,7 @@
     { "src": "save_manifest.php", "use": "@vercel/php" }
   ],
   "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1.js" },
     { "src": "/", "dest": "/index.html" },
     { "src": "/control", "dest": "/control.html" },
     { "src": "/control.html", "dest": "/control.html" },
