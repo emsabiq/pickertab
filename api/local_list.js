@@ -3,6 +3,30 @@ const fs = require('fs');
 const path = require('path');
 
 function resolveAssetsRoot() {
+  const baseDirs = [
+    process.cwd(),
+    __dirname,
+    path.resolve(__dirname, '..'),
+  ];
+
+  const relPaths = [
+    ['assets'],
+    ['public', 'assets'],
+  ];
+
+  const candidates = [];
+  const seen = new Set();
+
+  for (const base of baseDirs) {
+    for (const rel of relPaths) {
+      const candidate = path.resolve(base, ...rel);
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        candidates.push(candidate);
+      }
+    }
+  }
+
   const candidates = [
     path.resolve(process.cwd(), 'assets'),
     path.resolve(process.cwd(), 'public/assets'),
@@ -38,6 +62,12 @@ const handler = (req, res) => {
     }
 
     if (!fs.existsSync(target)) {
+      if (!reqPath) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(200).json({ ok:true, items: [] });
+        return;
+      }
+
       res.status(404).json({ ok:false, error:'Path tidak ditemukan' }); return;
     }
 
